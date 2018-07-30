@@ -1,0 +1,118 @@
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# celery beat schedule file
+celerybeat-schedule
+
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Django stuff:
+*.log
+local_settings.py
+
+# dotenv
+.env
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# IDES
+.idea
+.vscode
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Junk
+.DS_Store
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+
+# Pickles
+.pkl
+
+# PyBuilder
+target/
+
+# pyenv
+.python-version
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# pytest cache
+.pytest_cache/
+
+# Rope project settings
+.ropeproject
+
+# SageMath parsed files
+*.sage.py
+
+# Saved models
+saved_models/
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Translations
+*.mo
+*.pot
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# virtualenv
+.venv
+venv/
+ENV/
