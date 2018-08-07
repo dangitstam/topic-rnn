@@ -1,0 +1,45 @@
+{
+  "dataset_reader": {
+    "type": "imdb_review_reader",
+    "tokenizer": {
+      "type": "word"
+    },
+    "words_per_instance": 35
+  },
+  "train_data_path": "tests/fixtures/smoke.jsonl",
+  "validation_data_path": "tests/fixtures/smoke.jsonl",
+  "vocabulary": {
+    "max_vocab_size": 10000
+  },
+  "model": {
+    "type": "topic_rnn",
+    "text_field_embedder": {
+      "tokens": {
+        "type": "embedding",
+        "embedding_dim": 100,
+        "trainable": true,
+        "vocab_namespace": "tokens"
+      }
+    },
+    "text_encoder": {
+      "type": "rnn",
+      "input_size": 100,
+      "hidden_size": 128
+    },
+    "topic_dim": 10
+  },
+  "iterator": {
+    "type": "basic",
+    "batch_size": 64
+  },
+
+  "trainer": {
+    "num_epochs": 1000,
+    "patience": 10,
+    "cuda_device": -1,
+    "grad_clipping": 5.0,
+    "optimizer": {
+      "type": "adam"
+    }
+  }
+}
