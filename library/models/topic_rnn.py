@@ -17,6 +17,7 @@ from torch.nn.modules.linear import Linear
 
 from library.dataset_readers.util import STOP_WORDS
 
+device = torch.device("cuda:0")
 
 @Model.register("topic_rnn")
 class TopicRNN(Model):
@@ -98,7 +99,7 @@ class TopicRNN(Model):
             2,
             [vae_hidden_size, vae_hidden_size * topic_dim],
             torch.nn.ReLU(),
-        )
+        ).to(device)
 
         self.topic_dim = topic_dim
 
@@ -144,10 +145,10 @@ class TopicRNN(Model):
         # Compute the topic additions.
         # Shape: (batch x sequence length x hidden size)
         # 1. Compute noise for sampling.
-        epsilon = self.noise.rsample()
+        epsilon = self.noise.rsample().to(device)
 
         # 2. Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens)
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
         # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
