@@ -10,6 +10,29 @@ Implementation of Dieng et al.'s [TopicRNN](https://arxiv.org/abs/1611.01702): a
 
 ## Getting Started
 
+The system is built with PyTorch and AllenNLP, which are the main dependencies.
+
+### Prerequisites
+
+* Python 3.6 (3.6.5+ recommended)
+* AllenNLP 0.5.1
+
+### Installing
+
+It is recommended to first create a **virtual environment** before installing dependencies.
+
+#### Using Conda
+`conda create --name topic_rnn python=3.6`
+
+#### Using VirtualEnv
+`python3 -m venv /path/to/new/virtual/environment`
+
+Download PyTorch and AllenNLP via
+
+```
+`pip install -r requirements.txt`
+```
+
 ### Generating a Dataset (IMDB)
 `imdb_review_reader.py` contains a dataset reader primed to take a `.jsonl` file where each entry is of the form
 ```

@@ -1,0 +1,5 @@
+
+# AllenNLP & Test Suite
+allennlp==0.5.1
+pytest
+pytest-pythonpath
