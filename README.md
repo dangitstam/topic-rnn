@@ -14,8 +14,8 @@ Implementation of Dieng et al.'s [TopicRNN](https://arxiv.org/abs/1611.01702): a
 `imdb_review_reader.py` contains a dataset reader primed to take a `.jsonl` file where each entry is of the form
 ```
 {
-    'id': 0,
-    'text': <raw text of moview review>,
+    'id': <integer id>,
+    'text': <raw text of movie review>,
     'sentiment': <integer value representing sentiment>
 }
 ```
@@ -25,19 +25,33 @@ You can download the IMDB 100K dataset [here]( http://ai.stanford.edu/~amaas/dat
 Upon extracting the dataset from the tar, the resulting directory will look like
 ```
 aclImdb/
-    unsup/
     train/
+        unsup/
+            <review id>_<sentiment>.txt
+            ...
+        pos/
+            <review id>_<sentiment>.txt
+            ...
+        neg/
+            <review id>_<sentiment>.txt
+            ...
     test/
+        pos/
+            <review id>_<sentiment>.txt
+            ...
+        neg/
+            <review id>_<sentiment>.txt
+            ...
     ...
 ```
 
-You can generate the necessary `.jsonl` files via `scripts/generate_imdb_corpus.py`:
+You can generate the necessary `.jsonl` files via `scripts/generate_imdb_corpus.py` which expects the `aclImdb` file structure above:
 
 ```
 python generate_imdb_corpus.py --data-path <path to aclImdb>  --save-dir <directory to save the .jsonl files>
 ```
 
-The script expects the directory you get when undoing the tar containing the dataset. The `save_dir` directory will then contain three files: `train.jsonl`, `train_unlabeled.jsonl`, and `test.jsonl`. You will need to write the relative path to training/testing `.jsonl` files within your experiment JSON config.
+The directory specified by `--save-dir` will then contain three files: `train.jsonl`, `train_unlabeled.jsonl`, and `test.jsonl`. You will need to write the relative path to training/testing `.jsonl` files within your experiment JSON config.
 
 ### Training the model
 
@@ -45,7 +59,7 @@ The script expects the directory you get when undoing the tar containing the dat
 
 In this file, you must specify at minimum
 * The dataset reader with `type` (i.e. `imdb_review_reader`) and `words_per_instance` (backpropagation-through-time limit)
-* The relative paths to the training and validation `.jsonl` files (`generate_imdb_corpus.py` will be extended to produce training and validation splits at a later time).
+* The relative paths to the training and validation `.jsonl` files (`generate_imdb_corpus.py` will be extended to produce training and validation splits at a later time)
 * Vocabulary with `max_vocab_size`
 * The model with `type` (base implementation of `topic_rnn` is currently the only model), `text_field_embedder` (specify whether to use pretrained embeddings, embedding size, etc.), `text_encoder` (encoding the utterance via RNN, GRU, LSTM, etc.), and `topic_dim` (number of latent topics)
 
