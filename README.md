@@ -10,7 +10,61 @@ Implementation of Dieng et al.'s [TopicRNN](https://arxiv.org/abs/1611.01702): a
 
 ## Getting Started
 
-### Generating a Dataset
+### Generating a Dataset (IMDB)
+`imdb_review_reader.py` contains a dataset reader primed to take a `.jsonl` file where each entry is of the form
+```
+{
+    'id': 0,
+    'text': <raw text of moview review>,
+    'sentiment': <integer value representing sentiment>
+}
+```
 
+You can download the IMDB 100K dataset [here]( http://ai.stanford.edu/~amaas/data/sentiment/).
+
+Upon extracting the dataset from the tar, the resulting directory will look like
+```
+aclImdb/
+    unsup/
+    train/
+    test/
+    ...
+```
+
+You can generate the necessary `.jsonl` files via `scripts/generate_imdb_corpus.py`:
+
+```
+python generate_imdb_corpus.py --data-path <path to aclImdb>  --save-dir <directory to save the .jsonl files>
+```
+
+The script expects the directory you get when undoing the tar containing the dataset. The `save_dir` directory will then contain three files: `train.jsonl`, `train_unlabeled.jsonl`, and `test.jsonl`. You will need to write the relative path to training/testing `.jsonl` files within your experiment JSON config.
 
 ### Training the model
+
+`imdb_language_model.json`, a "cheating" version of a language model (cheating as in, the variational autoencoder is allowed to see the entire review before making inference), contains a base specification for TopicRNN (i.e hyperparamters, relative paths to training/testing `.jsonl`, etc.)
+
+In this file, you must specify at minimum
+* The dataset reader with `type` (i.e. `imdb_review_reader`) and `words_per_instance` (backpropagation-through-time limit)
+* The relative paths to the training and validation `.jsonl` files (`generate_imdb_corpus.py` will be extended to produce training and validation splits at a later time).
+* Vocabulary with `max_vocab_size`
+* The model with `type` (base implementation of `topic_rnn` is currently the only model), `text_field_embedder` (specify whether to use pretrained embeddings, embedding size, etc.), `text_encoder` (encoding the utterance via RNN, GRU, LSTM, etc.), and `topic_dim` (number of latent topics)
+
+To train the model, run
+```
+allennlp train <path to the current experiment's JSON configuration> \
+-s <directory for serialization>  \
+--include-package library
+```
+
+## Built With
+
+* [AllenNLP](https://allennlp.org/) - The NLP framework used, built by AI2
+* [PyTorch](https://pytorch.org/) - The deep learning library used
+
+## Authors
+
+* **Tam Dang**
+
+## License
+
+This project is licensed under the Apache License - see the [LICENSE.md](LICENSE) file for details.
