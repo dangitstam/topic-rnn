@@ -46,7 +46,7 @@ class Perplexity(Metric):
         probs = torch.nn.functional.softmax(logits, dim=-1) * mask.unsqueeze(-1).float()
         log_probs = torch.log2(probs)
 
-        # Select only the ground truth weighted negative likelihoods.
+        # Select only the log likelihoods of the ground truth.
         targets = targets.view(-1, 1)
         log_probs = log_probs.view(-1, num_classes)
         log_probs = log_probs.gather(-1, targets).squeeze()
