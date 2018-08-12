@@ -84,7 +84,9 @@ Training this simple model can be done right out of the box after installing req
 ```
 allennlp train tests/fixtures/smoke_imdb_language_model.json --s /tmp/topic_rnn_imdb_smoke --include-package library
 ```
-So long as the model can save a checkpoint, you're good to go.
+To ensure that the model runs properly with a GPU, change `cuda_device` under `trainer` in the config JSON to point to an available device.
+
+So long as the model can save a checkpoint when using either a CPU or GPU, you're good to go.
 
 In any file in `experiments`, you must specify at minimum
 * The dataset reader with `type` (i.e. `imdb_review_reader`) and `words_per_instance` (backpropagation-through-time limit)
