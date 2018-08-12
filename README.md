@@ -68,13 +68,13 @@ aclImdb/
     ...
 ```
 
-You can generate the necessary `.jsonl` files via `scripts/generate_imdb_corpus.py` which expects the `aclImdb` file structure above:
+You can generate the necessary `.jsonl` files via `scripts/generate_imdb_corpus.py` needed to reproduce the results of the paper. The script expects the `aclImdb` file structure above, you can run it by doing
 
 ```
 python generate_imdb_corpus.py --data-path <path to aclImdb>  --save-dir <directory to save the .jsonl files>
 ```
 
-The directory specified by `--save-dir` will then contain three files: `train.jsonl`, `train_unlabeled.jsonl`, and `test.jsonl`. You will need to write the relative path to training/testing `.jsonl` files within your experiment JSON config.
+The directory specified by `--save-dir` will then contain five files: `train_unsup.jsonl`, `valid_unsup.jsonl`, `train_labeled.jsonl`, `valid_labeled.jsonl`, and `test.jsonl`. You will need to write the relative path to training/testing `.jsonl` files within your experiment JSON config.
 
 ### Training the model
 
