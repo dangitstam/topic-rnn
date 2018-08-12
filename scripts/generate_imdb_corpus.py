@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import random
 import sys
 
 from tqdm import tqdm
@@ -49,6 +50,9 @@ def main():
     parser.add_argument("--save-dir", type=str,
                         default=project_root,
                         help="Directory to store the preprocessed corpus.")
+    parser.add_argument("--seed", type=int,
+                        default=1337,
+                        help="Random seed to use when shuffling data.")
     args = parser.parse_args()
 
     try:
@@ -79,34 +83,69 @@ def main():
     assert os.path.exists(test_pos_dir)
     assert os.path.exists(test_neg_dir)
 
-    print("Producing unlabeled training jsonl:")
-    train_unsup_out = os.path.join(args.save_dir, "train_unlabeled.jsonl")
-    directory_to_jsonl(train_unsup_dir, train_unsup_out)
+    print("Parsing unlabeled training data:")
+    train_unsup_examples = directory_to_jsons(train_unsup_dir)
+    assert len(train_unsup_examples) == 50000
 
-    print("Producing labeled training jsonl:")
-    train_out = os.path.join(args.save_dir, "train.jsonl")
-    directory_to_jsonl(train_pos_dir, train_out)
-    directory_to_jsonl(train_neg_dir, train_out)
+    print("Parsing labeled training data:")
+    train_examples = directory_to_jsons(train_pos_dir)
+    train_examples += directory_to_jsons(train_neg_dir)
+    assert len(train_examples) == 25000
 
-    print("Producing labeled testing jsonl:")
+    print("Parsing labeled testing data:")
+    test_examples = directory_to_jsons(test_pos_dir)
+    test_examples += directory_to_jsons(test_neg_dir)
+    assert len(test_examples) == 25000
+
+    # In the paper, they use a combined set 65k training examples (labeled and
+    # unlabeled) for the unsupervised portion of training.
+    #
+    # They then train a separate classifier for interpreting the results of the
+    # final hidden state output of the TopicRNN into positive or negative sentiment.
+    #
+    # "train_unsup.jsonl" will include all 50k unlabeled samples with 10K randomly selected
+    # labeled examples. The remaining labeled samples will be used for validation.
+    #
+    # A full version of the labeled training data will also be saved for training the classifier
+    # (20K training, 5K validation).
+    train_unsup_out = os.path.join(args.save_dir, "train_unsup.jsonl")
+    valid_unsup_out = os.path.join(args.save_dir, "valid_unsup.jsonl")
+    train_out = os.path.join(args.save_dir, "train_labeled.jsonl")
+    valid_out = os.path.join(args.save_dir, "valid_labeled.jsonl")
     test_out = os.path.join(args.save_dir, "test.jsonl")
-    directory_to_jsonl(test_pos_dir, test_out)
-    directory_to_jsonl(test_neg_dir, test_out)
+
+    # Shuffle training and take the first 15K examples.
+    random.Random(args.seed).shuffle(train_examples)
+    train_unsup_examples += train_examples[:15000]
+    assert len(train_unsup_examples) == 65000
+
+    # Remainder to serve as validation.
+    valid_unsup_examples = train_examples[15000:]
+    assert len(valid_unsup_examples) == 10000
+
+    print("Saving training and validation unsupervised examples:")
+    write_jsons_to_file(train_unsup_examples, train_unsup_out)
+    write_jsons_to_file(valid_unsup_examples, valid_unsup_out)
+
+    print("Saving training and valdiation labeled examples:")
+    write_jsons_to_file(train_examples[:20000], train_out)
+    write_jsons_to_file(train_examples[20000:], valid_out)
+
+    print("Saving test labeled examples:")
+    write_jsons_to_file(test_examples, test_out)
 
 
-def directory_to_jsonl(data_dir, save_path):
-    """ 
+def directory_to_jsons(data_dir):
+    """
     Given a directory containing training instances from the IMDB
-    dataset, produces a jsonl with an example on each line of the form
+    dataset, produces a list of json objects of the form
     { "id": int, "text": str, "sentiment": int (optional) }
 
     :param data_dir: The directory containing the data instances.
     :param save_path: The path in which to save the jsonl.
     """
-    # Open in appendation mode given that this function may be called multiple
-    # times on the same file (positive and negative sentiment are in separate
-    # directories).
-    out_file = open(save_path, "a")
+
+    jsons = []
     for path in tqdm(os.listdir(data_dir)):
         full_path = os.path.join(data_dir, path)
 
@@ -121,8 +160,22 @@ def directory_to_jsonl(data_dir, save_path):
                 "text": example_text,
                 "sentiment": int(example_sentiment)
             }
-            json.dump(example, out_file, ensure_ascii=False)
-            out_file.write('\n')
+            jsons.append(example)
+
+    return jsons
+
+
+def write_jsons_to_file(jsons, save_path):
+    """
+    Write each json object in 'jsons' as its own line in the file designated by 'save_path'.
+    """
+    # Open in appendation mode given that this function may be called multiple
+    # times on the same file (positive and negative sentiment are in separate
+    # directories).
+    out_file = open(save_path, "a")
+    for example in tqdm(jsons):
+        json.dump(example, out_file, ensure_ascii=False)
+        out_file.write('\n')
 
 
 if __name__ == "__main__":
