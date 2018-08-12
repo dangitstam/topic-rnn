@@ -6,7 +6,7 @@
     },
     "words_per_instance": 35
   },
-  "train_data_path": "data/train_unlabeled.jsonl",
+  "train_data_path": "tests/fixtures/smoke.jsonl",
   "validation_data_path": "tests/fixtures/smoke.jsonl",
   "vocabulary": {
     "max_vocab_size": 10000
@@ -22,22 +22,22 @@
       }
     },
     "text_encoder": {
-      "type": "gru",
+      "type": "rnn",
       "input_size": 100,
-      "hidden_size": 512
+      "hidden_size": 128
     },
-    "topic_dim": 50
+    "topic_dim": 10
   },
   "iterator": {
     "type": "basic",
-    "batch_size": 80
+    "batch_size": 64
   },
 
   "trainer": {
-    "num_epochs": 25,
+    "num_epochs": 1000,
     "patience": 10,
     "cuda_device": 0,
-    "grad_clipping": 0.5,
+    "grad_clipping": 5.0,
     "optimizer": {
       "type": "adam"
     }

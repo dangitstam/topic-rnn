@@ -56,6 +56,9 @@ class TopicRNN(Model):
 
         # TODO: Sanity checks.
 
+        # For moving tensors to the GPU.
+        self.device = torch.cuda.current_device()
+
         self.text_field_embedder = text_field_embedder
         self.vocab_size = self.vocab.get_vocab_size("tokens")
         self.text_encoder = text_encoder
@@ -75,6 +78,7 @@ class TopicRNN(Model):
         self.stop_indices = torch.LongTensor([vocab.get_token_index(stop) for stop in STOP_WORDS])
 
         # Learnable topics.
+        # TODO: How should these be initialized?
         self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
 
         # mu: The mean of the variational distribution.
@@ -144,10 +148,10 @@ class TopicRNN(Model):
         # Compute the topic additions.
         # Shape: (batch x sequence length x hidden size)
         # 1. Compute noise for sampling.
-        epsilon = self.noise.rsample()
+        epsilon = self.noise.rsample().to(self.device)
 
         # 2. Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens)
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(self.device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
         # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
@@ -160,7 +164,7 @@ class TopicRNN(Model):
         # 3. Compute topic proportions given Gaussian parameters.
         theta = softmax(mu + torch.exp(log_sigma) * epsilon, dim=-1)
 
-        # TODO: Confirm that padding and OOV tokens are always indexed at 0 and 1.
+        # Padding and OOV tokens are indexed at 0 and 1.
         topic_additions = torch.mm(theta, self.beta)
         topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
         topic_additions.t()[0] = 0                  # Padding will be treated as stops.
