@@ -49,6 +49,10 @@ class Perplexity(Metric):
         # Select only the log likelihoods of the ground truth.
         targets = targets.view(-1, 1)
         log_probs = log_probs.view(-1, num_classes)
+
+        # At training time, targets may be on the GPU.
+        log_probs = log_probs.to(device=targets.device)
+
         log_probs = log_probs.gather(-1, targets).squeeze()
         log_probs_sum = log_probs.sum(-1)
 
