@@ -16,7 +16,7 @@ class Perplexity(Metric):
     probablity of the tokens in the corpus. The metric reported is then PP = 2^l.
 
     Without resetting, perplexity over the entire corpus is computed. When allowing resetting,
-    computes per-batch perplexity treating the current batch of words as a corpus itself.  
+    computes per-batch perplexity treating the current batch of words as a corpus itself.
     """
     def __init__(self) -> None:
         self._log_probs_sum = 0.0
