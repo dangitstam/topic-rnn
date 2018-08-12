@@ -78,15 +78,23 @@ The directory specified by `--save-dir` will then contain three files: `train.js
 
 ### Training the model
 
-`imdb_language_model.json`, a "cheating" version of a language model (cheating as in, the variational autoencoder is allowed to see the entire review before making inference), contains a base specification for TopicRNN (i.e hyperparamters, relative paths to training/testing `.jsonl`, etc.)
+`tests/fixtures/smoke_imdb_language_model.json` contains a base specification for TopicRNN (i.e hyperparamters, relative paths to training/testing `.jsonl`, etc.) as a hyperparameter. The fixtures also inlude a subset of the IMDB dataset in the expected format.
 
-In this file, you must specify at minimum
+Training this simple model can be done right out of the box after installing requirements. To ensure things are running smoothly, run
+```
+allennlp train tests/fixtures/smoke_imdb_language_model.json --s /tmp/topic_rnn_imdb_smoke --include-package library
+```
+So long as the model can save a checkpoint, you're good to go.
+
+In any file in `experiments`, you must specify at minimum
 * The dataset reader with `type` (i.e. `imdb_review_reader`) and `words_per_instance` (backpropagation-through-time limit)
 * The relative paths to the training and validation `.jsonl` files (`generate_imdb_corpus.py` will be extended to produce training and validation splits at a later time)
 * Vocabulary with `max_vocab_size`
 * The model with `type` (base implementation of `topic_rnn` is currently the only model), `text_field_embedder` (specify whether to use pretrained embeddings, embedding size, etc.), `text_encoder` (encoding the utterance via RNN, GRU, LSTM, etc.), and `topic_dim` (number of latent topics)
 
-To train the model, run
+An example, `experiments/imdb_language_model.json` is provided.
+
+To train the model with an experimental config, run
 ```
 allennlp train <path to the current experiment's JSON configuration> \
 -s <directory for serialization>  \
