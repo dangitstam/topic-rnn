@@ -56,9 +56,6 @@ class TopicRNN(Model):
 
         # TODO: Sanity checks.
 
-        # For moving tensors to the GPU.
-        self.device = torch.cuda.current_device()
-
         self.text_field_embedder = text_field_embedder
         self.vocab_size = self.vocab.get_vocab_size("tokens")
         self.text_encoder = text_encoder
@@ -145,13 +142,17 @@ class TopicRNN(Model):
         # Shape: (batch x sequence length x vocabulary size)
         logits = self.vocabulary_projection_layer(encoded_input)
 
+        # Word frequency vectors and noise aren't generated with the model. If the model
+        # is running on a GPU, these tensors need to be moved to the correct device.
+        device = logits.device
+
         # Compute the topic additions.
         # Shape: (batch x sequence length x hidden size)
         # 1. Compute noise for sampling.
-        epsilon = self.noise.rsample().to(self.device)
+        epsilon = self.noise.rsample().to(device=device)
 
         # 2. Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(self.device)
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
         # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
