@@ -16,6 +16,7 @@ from torch.nn.functional import softmax
 from torch.nn.modules.linear import Linear
 
 from library.dataset_readers.util import STOP_WORDS
+from library.metrics.perplexity import Perplexity
 
 
 @Model.register("topic_rnn")
@@ -56,8 +57,11 @@ class TopicRNN(Model):
 
         # TODO: Sanity checks.
 
-        # For moving tensors to the GPU.
-        self.device = torch.cuda.current_device()
+        # Perplexity for now is the only metric.
+        # TODO: Categorical Accuracy for classification.
+        self.metrics ={
+            'perplexity': Perplexity()
+        }
 
         self.text_field_embedder = text_field_embedder
         self.vocab_size = self.vocab.get_vocab_size("tokens")
@@ -112,7 +116,7 @@ class TopicRNN(Model):
     def forward(self,  # type: ignore
                 input_tokens: Dict[str, torch.LongTensor],
                 output_tokens: Dict[str, torch.LongTensor],
-                frequency_tokens: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:
+                frequency_tokens: Optional[Dict[str, torch.LongTensor]] = None) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -145,32 +149,36 @@ class TopicRNN(Model):
         # Shape: (batch x sequence length x vocabulary size)
         logits = self.vocabulary_projection_layer(encoded_input)
 
-        # Compute the topic additions.
-        # Shape: (batch x sequence length x hidden size)
-        # 1. Compute noise for sampling.
-        epsilon = self.noise.rsample().to(self.device)
+        # Word frequency vectors and noise aren't generated with the model. If the model
+        # is running on a GPU, these tensors need to be moved to the correct device.
+        device = logits.device
 
-        # 2. Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(self.device)
-        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        # Compute the topic additions when frequency tokens are available.
+        if frequency_tokens:
+            # 1. Compute noise for sampling.
+            epsilon = self.noise.rsample().to(device=device)
 
-        # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
-        mapped_term_frequencies = softmax(mapped_term_frequencies.view(-1, self.topic_dim,
-                                                                       self.vae_hidden_size))
+            # 2. Compute Gaussian parameters.
+            stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+            mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-        mu = mapped_term_frequencies.matmul(self.w_mu) + self.a_mu
-        log_sigma = mapped_term_frequencies.matmul(self.w_sigma) + self.a_sigma
+            # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
+            mapped_term_frequencies = softmax(mapped_term_frequencies.view(-1, self.topic_dim,
+                                                                        self.vae_hidden_size))
 
-        # 3. Compute topic proportions given Gaussian parameters.
-        theta = softmax(mu + torch.exp(log_sigma) * epsilon, dim=-1)
+            mu = mapped_term_frequencies.matmul(self.w_mu) + self.a_mu
+            log_sigma = mapped_term_frequencies.matmul(self.w_sigma) + self.a_sigma
 
-        # Padding and OOV tokens are indexed at 0 and 1.
-        topic_additions = torch.mm(theta, self.beta)
-        topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
-        topic_additions.t()[0] = 0                  # Padding will be treated as stops.
-        topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
-        topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
-        logits += topic_additions
+            # 3. Compute topic proportions given Gaussian parameters.
+            theta = softmax(mu + torch.exp(log_sigma) * epsilon, dim=-1)
+
+            # Padding and OOV tokens are indexed at 0 and 1.
+            topic_additions = torch.mm(theta, self.beta)
+            topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
+            topic_additions.t()[0] = 0                  # Padding will be treated as stops.
+            topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
+            topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
+            logits += topic_additions
 
         if output_tokens:
             # Mask the output for proper loss calculation.
@@ -193,6 +201,9 @@ class TopicRNN(Model):
 
             loss = -kl_divergence + cross_entropy_loss
             output_dict['loss'] = loss
+
+            # Compute perplexity.
+            self.metrics['perplexity'](logits, relevant_output, relevant_output_mask)
 
         return output_dict
 
@@ -217,6 +228,10 @@ class TopicRNN(Model):
                     res[i][index] = count * int(index > 0)
 
         return res
+
+    @overrides
+    def get_metrics(self, reset: bool = False) -> Dict[str, float]:
+        return {metric_name: metric.get_metric(reset) for metric_name, metric in self.metrics.items()}
 
     @overrides
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
