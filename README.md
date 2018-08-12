@@ -78,7 +78,7 @@ The directory specified by `--save-dir` will then contain five files: `train_uns
 
 ### Training the model
 
-`tests/fixtures/smoke_imdb_language_model.json` contains a base specification for TopicRNN (i.e hyperparamters, relative paths to training/testing `.jsonl`, etc.). The fixtures also inlude a subset of the IMDB dataset in the expected format.
+`tests/fixtures/smoke_imdb_language_model.json` contains a base specification for TopicRNN (i.e hyperparamters, relative paths to training/testing `.jsonl`, etc.). The fixtures also includes a subset of the IMDB dataset in the expected format.
 
 Training this simple model can be done right out of the box after installing requirements. To ensure things are running smoothly, run
 ```
