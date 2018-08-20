@@ -1,13 +1,13 @@
 {
   "dataset_reader": {
-    "type": "imdb_review_language_modeling_reader",
+    "type": "imdb_review_reader",
     "tokenizer": {
       "type": "word"
     },
     "words_per_instance": 35
   },
-  "train_data_path": "data/train_unlabeled.jsonl",
-  "validation_data_path": "tests/fixtures/smoke.jsonl",
+  "train_data_path": "data/train_unsup.jsonl",
+  "validation_data_path": "data/valid_unsup.jsonl",
   "vocabulary": {
     "max_vocab_size": 10000
   },
@@ -26,11 +26,11 @@
       "input_size": 100,
       "hidden_size": 512
     },
-    "topic_dim": 50
+    "topic_dim": 200
   },
   "iterator": {
     "type": "basic",
-    "batch_size": 80
+    "batch_size": 64
   },
 
   "trainer": {
