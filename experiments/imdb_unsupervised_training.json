@@ -9,7 +9,7 @@
   "train_data_path": "data/train_unsup.jsonl",
   "validation_data_path": "data/valid_unsup.jsonl",
   "vocabulary": {
-    "max_vocab_size": 10000
+    "max_vocab_size": 5000
   },
   "model": {
     "type": "topic_rnn",
@@ -22,11 +22,13 @@
       }
     },
     "text_encoder": {
-      "type": "gru",
+      "type": "rnn",
       "input_size": 100,
-      "hidden_size": 512
+      "hidden_size": 300,
+      "num_layers": 2
     },
-    "topic_dim": 200
+    "topic_dim": 200,
+    "vae_hidden_size": 500
   },
   "iterator": {
     "type": "basic",
@@ -34,7 +36,7 @@
   },
 
   "trainer": {
-    "num_epochs": 25,
+    "num_epochs": 20,
     "patience": 10,
     "cuda_device": 0,
     "grad_clipping": 0.5,

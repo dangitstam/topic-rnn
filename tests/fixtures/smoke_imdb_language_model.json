@@ -24,9 +24,11 @@
     "text_encoder": {
       "type": "rnn",
       "input_size": 100,
-      "hidden_size": 128
+      "hidden_size": 128,
+      "num_layers": 2
     },
-    "topic_dim": 10
+    "topic_dim": 10,
+    "vae_hidden_size": 50
   },
   "iterator": {
     "type": "basic",
