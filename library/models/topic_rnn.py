@@ -86,11 +86,11 @@ class TopicRNN(Model):
         self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
 
         # mu: The mean of the variational distribution.
-        self.w_mu = nn.Parameter(torch.rand(self.vae_hidden_size))
+        self.w_mu = nn.Parameter(torch.rand(topic_dim))
         self.a_mu = nn.Parameter(torch.rand(topic_dim))
 
         # sigma: The root standard deviation of the variational distribution.
-        self.w_sigma = nn.Parameter(torch.rand(self.vae_hidden_size))
+        self.w_sigma = nn.Parameter(torch.rand(topic_dim))
         self.a_sigma = nn.Parameter(torch.rand(topic_dim))
 
         # noise: used when sampling.
@@ -104,7 +104,7 @@ class TopicRNN(Model):
             # Each latent representation will help tune the variational dist.'s parameters.
             stopless_dim,
             2,
-            [vae_hidden_size, vae_hidden_size * topic_dim],
+            [vae_hidden_size, topic_dim],
             torch.nn.ReLU(),
         )
 
@@ -162,15 +162,11 @@ class TopicRNN(Model):
             stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
             mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-            # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
-            mapped_term_frequencies = softmax(mapped_term_frequencies.view(-1, self.topic_dim,
-                                                                           self.vae_hidden_size), dim=-1)
-
-            mu = mapped_term_frequencies.matmul(self.w_mu) + self.a_mu
-            log_sigma = mapped_term_frequencies.matmul(self.w_sigma) + self.a_sigma
+            mu = self.w_mu * mapped_term_frequencies + self.a_mu
+            log_sigma = self.w_sigma * mapped_term_frequencies + self.a_sigma
 
             # 3. Compute topic proportions given Gaussian parameters.
-            theta = softmax(mu + torch.exp(log_sigma) * epsilon, dim=-1)
+            theta = mu + torch.exp(log_sigma) * epsilon
 
             # Padding and OOV tokens are indexed at 0 and 1.
             topic_additions = torch.mm(theta, self.beta)
