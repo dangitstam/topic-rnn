@@ -40,6 +40,11 @@ class TopicRNN(Model):
         The feedforward network to produce the parameters for the variational distribution.
     topic_dim: ``int``
         The number of latent topics to use.
+    freeze_feature_extraction: ``bool``
+        If true, the encoding of text as well as learned topics will be frozen.
+    classification_mode: ``bool``
+        If true, the model will output cross entropy loss w.r.t sentiment instead of
+        prediction the rest of the sequence.
     initializer : ``InitializerApplicator``, optional (default=``InitializerApplicator()``)
         Used to initialize the model parameters.
     regularizer : ``RegularizerApplicator``, optional (default=``None``)
@@ -49,8 +54,13 @@ class TopicRNN(Model):
                  text_field_embedder: TextFieldEmbedder,
                  text_encoder: Seq2SeqEncoder,
                  variational_autoencoder: FeedForward = None,
+                 sentiment_classifier: FeedForward = None,
                  vae_hidden_size: int = 128,
                  topic_dim: int = 20,
+
+                 # TODO: Experiment sentiment prediction with unfrozen weights.
+                 freeze_feature_extraction: bool = False,
+                 classification_mode: bool = False,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(TopicRNN, self).__init__(vocab, regularizer)
@@ -68,6 +78,7 @@ class TopicRNN(Model):
         self.text_encoder = text_encoder
         self.vae_hidden_size = vae_hidden_size
         self.topic_dim = topic_dim
+        self.classification_mode = True
         self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
                                                                   self.vocab_size))
 
@@ -108,7 +119,22 @@ class TopicRNN(Model):
             torch.nn.ReLU(),
         )
 
-        self.topic_dim = topic_dim
+        # It is most convenient to define the classifier after optionally freezing the parameters
+        # to prevent accidentally freezing it.
+        if freeze_feature_extraction:
+            for param in self.parameters():
+                param.requires_grad = False
+
+        # RNN Hidden Size + Inference Network output dimension.
+        sentiment_input_size = text_encoder.get_output_dim() + vae_hidden_size * topic_dim
+        self.sentiment_classifier = sentiment_classifier or FeedForward(
+            # Takes as input the encoded word frequencies along with the terminal RNN hidden state
+            # to perform sentiment classification.
+            sentiment_input_size,  
+            2,
+            [sentiment_input_size, 2],  # Two classes for positive & negative sentiment.
+            torch.nn.ReLU(),
+        )
 
         initializer(self)
 
@@ -116,7 +142,8 @@ class TopicRNN(Model):
     def forward(self,  # type: ignore
                 input_tokens: Dict[str, torch.LongTensor],
                 output_tokens: Dict[str, torch.LongTensor],
-                frequency_tokens: Optional[Dict[str, torch.LongTensor]] = None) -> Dict[str, torch.Tensor]:
+                frequency_tokens: Dict[str, torch.LongTensor],
+                sentiment: Dict[str, torch.LongTensor],) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -137,6 +164,7 @@ class TopicRNN(Model):
         loss : torch.FloatTensor, optional
             A scalar loss to be optimised.
         """
+        import pdb; pdb.set_trace()
         output_dict = {}
 
         # Encode the input text.
@@ -144,6 +172,9 @@ class TopicRNN(Model):
         embedded_input = self.text_field_embedder(input_tokens)
         input_mask = util.get_text_field_mask(input_tokens)
         encoded_input = self.text_encoder(embedded_input, input_mask)
+
+        # Terminal hidden state.
+        encoded_sequence = encoded_input[:, -1]
 
         # Initial projection into vocabulary space.
         # Shape: (batch x sequence length x vocabulary size)
@@ -154,56 +185,60 @@ class TopicRNN(Model):
         device = logits.device
 
         # Compute the topic additions when frequency tokens are available.
-        if frequency_tokens:
-            # 1. Compute noise for sampling.
-            epsilon = self.noise.rsample().to(device=device)
 
-            # 2. Compute Gaussian parameters.
-            stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
-            mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        # 1. Compute noise for sampling.
+        epsilon = self.noise.rsample().to(device=device)
 
-            # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
-            mapped_term_frequencies = softmax(mapped_term_frequencies.view(-1, self.topic_dim,
-                                                                           self.vae_hidden_size), dim=-1)
+        # 2. Compute Gaussian parameters.
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-            mu = mapped_term_frequencies.matmul(self.w_mu) + self.a_mu
-            log_sigma = mapped_term_frequencies.matmul(self.w_sigma) + self.a_sigma
+        # Perform  reshape for a (topic dim x vae hidden size) tensor.
+        mapped_term_frequencies = mapped_term_frequencies.view(-1, self.topic_dim, self.vae_hidden_size)
 
-            # 3. Compute topic proportions given Gaussian parameters.
-            theta = softmax(mu + torch.exp(log_sigma) * epsilon, dim=-1)
+        mu = mapped_term_frequencies.matmul(self.w_mu) + self.a_mu
+        log_sigma = mapped_term_frequencies.matmul(self.w_sigma) + self.a_sigma
 
-            # Padding and OOV tokens are indexed at 0 and 1.
-            topic_additions = torch.mm(theta, self.beta)
-            topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
-            topic_additions.t()[0] = 0                  # Padding will be treated as stops.
-            topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
-            topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
-            logits += topic_additions
+        # 3. Compute topic proportions given Gaussian parameters.
+        theta = softmax(mu + torch.exp(log_sigma) * epsilon, dim=-1)
+
+        # Padding and OOV tokens are indexed at 0 and 1.
+        topic_additions = torch.mm(theta, self.beta)
+        topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
+        topic_additions.t()[0] = 0                  # Padding will be treated as stops.
+        topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
+        topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
+        logits += topic_additions
 
         if output_tokens:
             # Mask the output for proper loss calculation.
             output_mask = util.get_text_field_mask(output_tokens)
             relevant_output = output_tokens['tokens'].contiguous()
             relevant_output_mask = output_mask.contiguous()
+            if self.classification_mode:  # Predict sentiment.
 
-            # Compute KL-Divergence.
-            # A closed-form solution exists since we're assuming q is drawn
-            # from a normal distribution.
-            kl_divergence = 1 + 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
+                features = None  # Extract terminal hidden state here
+                
+            else:  # Predict the rest of the sequence.
 
-            # Sum along the topic dimension.
-            kl_divergence = torch.sum(kl_divergence) / 2
+                # Compute KL-Divergence.
+                # A closed-form solution exists since we're assuming q is drawn
+                # from a normal distribution.
+                kl_divergence = 1 + 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
 
-            # Sampling log loss with L = 1
-            # TODO: Should this be extended to support arbitrary L?
-            cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits, relevant_output,
-                                                                         relevant_output_mask)
+                # Sum along the topic dimension.
+                kl_divergence = torch.sum(kl_divergence) / 2
 
-            loss = -kl_divergence + cross_entropy_loss
-            output_dict['loss'] = loss
+                # Sampling log loss with L = 1
+                # TODO: Should this be extended to support arbitrary L?
+                cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits, relevant_output,
+                                                                            relevant_output_mask)
 
-            # Compute perplexity.
-            self.metrics['perplexity'](logits, relevant_output, relevant_output_mask)
+                loss = -kl_divergence + cross_entropy_loss
+                output_dict['loss'] = loss
+
+                # Compute perplexity.
+                self.metrics['perplexity'](logits, relevant_output, relevant_output_mask)
 
         return output_dict
 

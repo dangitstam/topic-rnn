@@ -5,7 +5,7 @@ from allennlp.common import Params
 from allennlp.common.file_utils import cached_path
 from allennlp.common.util import END_SYMBOL, START_SYMBOL
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import TextField
+from allennlp.data.fields import LabelField, TextField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenIndexer
 from allennlp.data.tokenizers import Tokenizer, WordTokenizer
@@ -197,6 +197,8 @@ class IMDBReviewReader(DatasetReader):
                 example = ujson.loads(line)
                 example_text = example['text']
                 example_text_tokenized = self._tokenizer.tokenize(example_text)
+                example_sentiment = "positive" if example['sentiment'] >= 5 else "negative"
+                sentiment_field = LabelField(example_sentiment)
 
                 # Each review will receive the entire encoded review.
                 frequency_field = TextField(example_text_tokenized, self._token_indexers)
@@ -209,7 +211,8 @@ class IMDBReviewReader(DatasetReader):
                     output_field = TextField(tokenized_string[1:], self._token_indexers)
                     yield Instance({'input_tokens': input_field,
                                     'output_tokens': output_field,
-                                    'frequency_tokens': frequency_field})
+                                    'frequency_tokens': frequency_field,
+                                    'sentiment': sentiment_field})
 
     @classmethod
     def from_params(cls, params: Params) -> 'IMDBReviewReader':
