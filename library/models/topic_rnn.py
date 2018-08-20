@@ -164,7 +164,7 @@ class TopicRNN(Model):
 
             # Perform a softmax and a reshape for a (topic dim x vae hidden size) tensor.
             mapped_term_frequencies = softmax(mapped_term_frequencies.view(-1, self.topic_dim,
-                                                                        self.vae_hidden_size))
+                                                                           self.vae_hidden_size), dim=-1)
 
             mu = mapped_term_frequencies.matmul(self.w_mu) + self.a_mu
             log_sigma = mapped_term_frequencies.matmul(self.w_sigma) + self.a_sigma
