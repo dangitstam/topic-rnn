@@ -240,11 +240,13 @@ class TopicRNN(Model):
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
         text_encoder = Seq2SeqEncoder.from_params(params.pop("text_encoder"))
         topic_dim = params.pop("topic_dim")
+        vae_hidden_size = params.pop("vae_hidden_size")
         initializer = InitializerApplicator.from_params(params.pop('initializer', []))
         regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
                    text_encoder=text_encoder,
                    topic_dim=topic_dim,
+                   vae_hidden_size=vae_hidden_size,
                    initializer=initializer,
                    regularizer=regularizer)
