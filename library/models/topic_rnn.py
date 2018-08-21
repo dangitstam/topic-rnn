@@ -10,6 +10,7 @@ from allennlp.models.model import Model
 from allennlp.modules import (FeedForward, Seq2SeqEncoder, TextFieldEmbedder,
                               TimeDistributed)
 from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
+from allennlp.training.metrics import Average
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.nn.functional import softmax
@@ -57,10 +58,11 @@ class TopicRNN(Model):
 
         # TODO: Sanity checks.
 
-        # Perplexity for now is the only metric.
         # TODO: Categorical Accuracy for classification.
         self.metrics ={
-            'perplexity': Perplexity()
+            'perplexity': Perplexity(),
+            'cross_entropy': Average(),
+            'negative_kl_divergence': Average()
         }
 
         self.text_field_embedder = text_field_embedder
@@ -200,6 +202,11 @@ class TopicRNN(Model):
 
             # Compute perplexity.
             self.metrics['perplexity'](logits, relevant_output, relevant_output_mask)
+
+            # It's nice to see how the model does as an actual language model vs.
+            # the KL-Divergence and Cross Entropy sum.
+            self.metrics['cross_entropy'](cross_entropy_loss)
+            self.metrics['negative_kl_divergence'](-kl_divergence)
 
         return output_dict
 
