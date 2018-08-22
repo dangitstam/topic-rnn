@@ -10,7 +10,7 @@ from allennlp.models.model import Model
 from allennlp.modules import (FeedForward, Seq2SeqEncoder, TextFieldEmbedder,
                               TimeDistributed)
 from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
-from allennlp.training.metrics import Average
+from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.nn.functional import softmax
@@ -19,6 +19,7 @@ from torch.nn.modules.linear import Linear
 from library.dataset_readers.util import STOP_WORDS
 from library.metrics.perplexity import Perplexity
 
+# TODO: Add classification layer and freezing parameter.
 
 @Model.register("topic_rnn")
 class TopicRNN(Model):
@@ -50,8 +51,11 @@ class TopicRNN(Model):
                  text_field_embedder: TextFieldEmbedder,
                  text_encoder: Seq2SeqEncoder,
                  variational_autoencoder: FeedForward = None,
+                 sentiment_classifier: FeedForward = None,
                  vae_hidden_size: int = 128,
                  topic_dim: int = 20,
+                 freeze_feature_extraction: bool = False,
+                 classification_mode: bool = False,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(TopicRNN, self).__init__(vocab, regularizer)
@@ -65,10 +69,14 @@ class TopicRNN(Model):
             'negative_kl_divergence': Average()
         }
 
+        if classification_mode:
+            self.metrics['sentiment'] = CategoricalAccuracy()
+
         self.text_field_embedder = text_field_embedder
         self.vocab_size = self.vocab.get_vocab_size("tokens")
         self.text_encoder = text_encoder
         self.vae_hidden_size = vae_hidden_size
+        self.classification_mode = classification_mode
         self.topic_dim = topic_dim
         self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
                                                                   self.vocab_size))
@@ -112,13 +120,34 @@ class TopicRNN(Model):
 
         self.topic_dim = topic_dim
 
+        # Prevent gradients from passing through the RNNs / VAE to test if they're good
+        # feature extractors.
+        if freeze_feature_extraction:
+            for _, parameter in self.named_parameters():
+                parameter.requires_grad_(False)
+
+        # The shape for the feature vector for sentiment classification.
+        # (RNN Hidden Size + Inference Network output dimension).
+        sentiment_input_size = text_encoder.get_output_dim() + topic_dim
+        self.sentiment_classifier = sentiment_classifier or FeedForward(
+            # As done by the paper; a simple single layer with 50 hidden units
+            # and sigmoid activation for sentiment classification.
+            sentiment_input_size,
+            2,
+            [50, 2],
+            torch.nn.Sigmoid(),
+        )
+
+        self.sentiment_criterion = nn.CrossEntropyLoss()
+
         initializer(self)
 
     @overrides
     def forward(self,  # type: ignore
                 input_tokens: Dict[str, torch.LongTensor],
                 output_tokens: Dict[str, torch.LongTensor],
-                frequency_tokens: Optional[Dict[str, torch.LongTensor]] = None) -> Dict[str, torch.Tensor]:
+                frequency_tokens: Dict[str, torch.LongTensor],
+                sentiment: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -156,27 +185,27 @@ class TopicRNN(Model):
         device = logits.device
 
         # Compute the topic additions when frequency tokens are available.
-        if frequency_tokens:
-            # 1. Compute noise for sampling.
-            epsilon = self.noise.rsample().to(device=device)
 
-            # 2. Compute Gaussian parameters.
-            stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
-            mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        # 1. Compute noise for sampling.
+        epsilon = self.noise.rsample().to(device=device)
 
-            mu = self.w_mu * mapped_term_frequencies + self.a_mu
-            log_sigma = self.w_sigma * mapped_term_frequencies + self.a_sigma
+        # 2. Compute Gaussian parameters.
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-            # 3. Compute topic proportions given Gaussian parameters.
-            theta = mu + torch.exp(log_sigma) * epsilon
+        mu = self.w_mu * mapped_term_frequencies + self.a_mu
+        log_sigma = self.w_sigma * mapped_term_frequencies + self.a_sigma
 
-            # Padding and OOV tokens are indexed at 0 and 1.
-            topic_additions = torch.mm(theta, self.beta)
-            topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
-            topic_additions.t()[0] = 0                  # Padding will be treated as stops.
-            topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
-            topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
-            logits += topic_additions
+        # 3. Compute topic proportions given Gaussian parameters.
+        theta = mu + torch.exp(log_sigma) * epsilon
+
+        # Padding and OOV tokens are indexed at 0 and 1.
+        topic_additions = torch.mm(theta, self.beta)
+        topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
+        topic_additions.t()[0] = 0                  # Padding will be treated as stops.
+        topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
+        topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
+        logits += topic_additions
 
         if output_tokens:
             # Mask the output for proper loss calculation.
@@ -197,8 +226,10 @@ class TopicRNN(Model):
             cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits, relevant_output,
                                                                          relevant_output_mask)
 
-            loss = -kl_divergence + cross_entropy_loss
-            output_dict['loss'] = loss
+            if self.classification_mode:
+                output_dict['loss'] = self._classify_sentiment(frequency_tokens, sentiment)
+            else:
+                output_dict['loss'] = -kl_divergence + cross_entropy_loss
 
             # Compute perplexity.
             self.metrics['perplexity'](logits, relevant_output, relevant_output_mask)
@@ -209,6 +240,36 @@ class TopicRNN(Model):
             self.metrics['negative_kl_divergence'](-(kl_divergence.item()))
 
         return output_dict
+
+    def _classify_sentiment(self,  # type: ignore
+                            frequency_tokens: Dict[str, torch.LongTensor],
+                            sentiment: Dict[str, torch.LongTensor]) -> torch.Tensor:
+        # pylint: disable=arguments-differ
+        """
+        Using the entire review (frequency_tokens), classify it as positive or negative.
+        """
+
+        # Encode the input text.
+        # Shape: (batch, sequence length, hidden size)
+        embedded_input = self.text_field_embedder(frequency_tokens)
+        input_mask = util.get_text_field_mask(frequency_tokens)
+        encoded_input = self.text_encoder(embedded_input, input_mask)
+        device = encoded_input.device
+
+        # Construct feature vector.
+        # Shape: (batch, RNN hidden size + number of topics)
+        encoded_input_final_hidden = encoded_input[:, -1]
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        sentiment_features = torch.cat([encoded_input_final_hidden, mapped_term_frequencies], dim=-1)
+
+        # Classify.
+        logits = self.sentiment_classifier(sentiment_features)
+        loss = self.sentiment_criterion(logits, sentiment)
+
+        self.metrics['sentiment'](logits, sentiment)
+
+        return loss
 
     def _compute_word_frequency_vector(self, frequency_tokens: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:
         """ Given the window in which we're allowed to collect word frequencies, produce a
@@ -246,14 +307,18 @@ class TopicRNN(Model):
         embedder_params = params.pop("text_field_embedder")
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
         text_encoder = Seq2SeqEncoder.from_params(params.pop("text_encoder"))
-        topic_dim = params.pop("topic_dim")
-        vae_hidden_size = params.pop("vae_hidden_size")
+        topic_dim = params.pop("topic_dim", 20)
+        freeze_feature_extraction = params.pop("freeze_feature_extraction", False)
+        vae_hidden_size = params.pop("vae_hidden_size", 128)
+        classification_mode = params.pop("classification_mode", False)
         initializer = InitializerApplicator.from_params(params.pop('initializer', []))
         regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
                    text_encoder=text_encoder,
                    topic_dim=topic_dim,
+                   freeze_feature_extraction=freeze_feature_extraction,
                    vae_hidden_size=vae_hidden_size,
+                   classification_mode=classification_mode,
                    initializer=initializer,
                    regularizer=regularizer)

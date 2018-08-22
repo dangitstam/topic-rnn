@@ -28,7 +28,9 @@
       "num_layers": 2
     },
     "topic_dim": 10,
-    "vae_hidden_size": 50
+    "vae_hidden_size": 50,
+    "classification_mode": true,
+    "freeze_feature_extraction": true
   },
   "iterator": {
     "type": "basic",
