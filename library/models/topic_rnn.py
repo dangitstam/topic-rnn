@@ -19,7 +19,6 @@ from torch.nn.modules.linear import Linear
 from library.dataset_readers.util import STOP_WORDS
 from library.metrics.perplexity import Perplexity
 
-# TODO: Add classification layer and freezing parameter.
 
 @Model.register("topic_rnn")
 class TopicRNN(Model):
@@ -42,6 +41,11 @@ class TopicRNN(Model):
         The feedforward network to produce the parameters for the variational distribution.
     topic_dim: ``int``
         The number of latent topics to use.
+    freeze_feature_extraction: ``bool``
+        If true, the encoding of text as well as learned topics will be frozen.
+    classification_mode: ``bool``
+        If true, the model will output cross entropy loss w.r.t sentiment instead of
+        prediction the rest of the sequence.
     initializer : ``InitializerApplicator``, optional (default=``InitializerApplicator()``)
         Used to initialize the model parameters.
     regularizer : ``RegularizerApplicator``, optional (default=``None``)
@@ -78,6 +82,7 @@ class TopicRNN(Model):
         self.vae_hidden_size = vae_hidden_size
         self.classification_mode = classification_mode
         self.topic_dim = topic_dim
+        self.classification_mode = True
         self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
                                                                   self.vocab_size))
 
@@ -118,7 +123,22 @@ class TopicRNN(Model):
             torch.nn.ReLU(),
         )
 
-        self.topic_dim = topic_dim
+        # It is most convenient to define the classifier after optionally freezing the parameters
+        # to prevent accidentally freezing it.
+        if freeze_feature_extraction:
+            for param in self.parameters():
+                param.requires_grad = False
+
+        # RNN Hidden Size + Inference Network output dimension.
+        sentiment_input_size = text_encoder.get_output_dim() + vae_hidden_size * topic_dim
+        self.sentiment_classifier = sentiment_classifier or FeedForward(
+            # Takes as input the encoded word frequencies along with the terminal RNN hidden state
+            # to perform sentiment classification.
+            sentiment_input_size,
+            2,
+            [sentiment_input_size, 2],  # Two classes for positive & negative sentiment.
+            torch.nn.ReLU(),
+        )
 
         # Prevent gradients from passing through the RNNs / VAE to test if they're good
         # feature extractors.
