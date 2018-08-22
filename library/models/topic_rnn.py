@@ -205,8 +205,8 @@ class TopicRNN(Model):
 
             # It's nice to see how the model does as an actual language model vs.
             # the KL-Divergence and Cross Entropy sum.
-            self.metrics['cross_entropy'](cross_entropy_loss)
-            self.metrics['negative_kl_divergence'](-kl_divergence)
+            self.metrics['cross_entropy'](cross_entropy_loss.item())
+            self.metrics['negative_kl_divergence'](-(kl_divergence.item()))
 
         return output_dict
 
