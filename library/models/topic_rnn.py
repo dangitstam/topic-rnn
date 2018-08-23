@@ -82,7 +82,6 @@ class TopicRNN(Model):
         self.vae_hidden_size = vae_hidden_size
         self.classification_mode = classification_mode
         self.topic_dim = topic_dim
-        self.classification_mode = True
         self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
                                                                   self.vocab_size))
 
