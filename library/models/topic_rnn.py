@@ -246,7 +246,7 @@ class TopicRNN(Model):
                                                                          relevant_output_mask)
 
             if self.classification_mode:
-                output_dict['loss'] = self._classify_sentiment(frequency_tokens, sentiment)
+                output_dict['loss'] = self._classify_sentiment(frequency_tokens, mapped_term_frequencies, sentiment)
             else:
                 output_dict['loss'] = -kl_divergence + cross_entropy_loss
 
@@ -262,6 +262,7 @@ class TopicRNN(Model):
 
     def _classify_sentiment(self,  # type: ignore
                             frequency_tokens: Dict[str, torch.LongTensor],
+                            mapped_term_frequencies: torch.Tensor,
                             sentiment: Dict[str, torch.LongTensor]) -> torch.Tensor:
         # pylint: disable=arguments-differ
         """
@@ -273,13 +274,10 @@ class TopicRNN(Model):
         embedded_input = self.text_field_embedder(frequency_tokens)
         input_mask = util.get_text_field_mask(frequency_tokens)
         encoded_input = self.text_encoder(embedded_input, input_mask)
-        device = encoded_input.device
 
         # Construct feature vector.
         # Shape: (batch, RNN hidden size + number of topics)
         encoded_input_final_hidden = encoded_input[:, -1]
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
-        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
         sentiment_features = torch.cat([encoded_input_final_hidden, mapped_term_frequencies], dim=-1)
 
         # Classify.
