@@ -32,7 +32,7 @@
       "hidden_size": 300,
       "num_layers": 2
     },
-    "topic_dim": 200,
+    "topic_dim": 200
   },
   "iterator": {
     "type": "basic",

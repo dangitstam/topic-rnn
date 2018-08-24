@@ -3,7 +3,6 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
-from allennlp.common import Params
 from allennlp.data.vocabulary import (DEFAULT_OOV_TOKEN, DEFAULT_PADDING_TOKEN,
                                       Vocabulary)
 from allennlp.models.archival import load_archive
@@ -14,7 +13,6 @@ from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
-from torch.nn.functional import softmax
 from torch.nn.modules.linear import Linear
 
 from library.dataset_readers.util import STOP_WORDS
@@ -67,7 +65,7 @@ class TopicRNN(Model):
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(TopicRNN, self).__init__(vocab, regularizer)
 
-        self.metrics ={
+        self.metrics = {
             'perplexity': Perplexity(),
             'cross_entropy': Average(),
             'negative_kl_divergence': Average()
@@ -91,7 +89,7 @@ class TopicRNN(Model):
             self.text_encoder = text_encoder
             self.topic_dim = topic_dim
             self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
-                                                                    self.vocab_size))
+                                                                      self.vocab_size))
 
             self.tokens_to_index = vocab.get_token_to_index_vocabulary()
 
@@ -336,4 +334,3 @@ class TopicRNN(Model):
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # TODO: What makes sense for a decode for TopicRNN?
         return output_dict
-
