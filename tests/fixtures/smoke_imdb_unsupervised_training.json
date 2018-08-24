@@ -6,16 +6,18 @@
     },
     "words_per_instance": 35
   },
-  "train_data_path": "data/train_labeled.jsonl",
-  "validation_data_path": "data/valid_labeled.jsonl",
+  "train_data_path": "tests/fixtures/smoke.jsonl",
+  "validation_data_path": "tests/fixtures/smoke.jsonl",
   "vocabulary": {
-    "directory_path": "vocabulary"
+    "max_vocab_size": 10000,
+    "tokens_to_add": {
+      "labels": ["positive", "negative"]
+    }
   },
   "model": {
     "type": "topic_rnn",
-    "classification_mode": true,
-    "freeze_feature_extraction": true,
-    "pretrained_file": "saved_models/topic_rnn/model.tar.gz",
+    "classification_mode": false,
+    "freeze_feature_extraction": false,
     "text_field_embedder": {
       "tokens": {
         "type": "embedding",
@@ -27,10 +29,10 @@
     "text_encoder": {
       "type": "rnn",
       "input_size": 100,
-      "hidden_size": 300,
+      "hidden_size": 128,
       "num_layers": 2
     },
-    "topic_dim": 200
+    "topic_dim": 10
   },
   "iterator": {
     "type": "basic",
@@ -38,10 +40,10 @@
   },
 
   "trainer": {
-    "num_epochs": 50,
+    "num_epochs": 1,
     "patience": 10,
-    "cuda_device": 0,
-    "grad_clipping": 0.5,
+    "cuda_device": -1,
+    "grad_clipping": 5.0,
     "optimizer": {
       "type": "adam"
     }

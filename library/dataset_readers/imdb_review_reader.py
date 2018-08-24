@@ -115,18 +115,6 @@ class IMDBReviewLanguageModelingReader(DatasetReader):
 
                     yield Instance(example)
 
-    @classmethod
-    def from_params(cls, params: Params) -> 'IMDBLanguageModelingReader':
-        lazy = params.pop('lazy', False)
-        tokenizer = Tokenizer.from_params(params.pop('tokenizer', {}))
-        token_indexers = TokenIndexer.dict_from_params(params.pop('token_indexers', {}))
-        words_per_instance = params.pop('words_per_instance', None)
-        params.assert_empty(cls.__name__)
-        return cls(lazy=lazy,
-                   tokenizer=tokenizer,
-                   token_indexers=token_indexers,
-                   words_per_instance=words_per_instance)
-
 
 @DatasetReader.register("imdb_review_reader")
 class IMDBReviewReader(DatasetReader):
@@ -213,15 +201,3 @@ class IMDBReviewReader(DatasetReader):
                                     'output_tokens': output_field,
                                     'frequency_tokens': frequency_field,
                                     'sentiment': example_sentiment_field})
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'IMDBReviewReader':
-        lazy = params.pop('lazy', False)
-        tokenizer = Tokenizer.from_params(params.pop('tokenizer', {}))
-        token_indexers = TokenIndexer.dict_from_params(params.pop('token_indexers', {}))
-        words_per_instance = params.pop('words_per_instance', None)
-        params.assert_empty(cls.__name__)
-        return cls(lazy=lazy,
-                   tokenizer=tokenizer,
-                   token_indexers=token_indexers,
-                   words_per_instance=words_per_instance)

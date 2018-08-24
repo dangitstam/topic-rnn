@@ -6,6 +6,7 @@ import torch.nn as nn
 from allennlp.common import Params
 from allennlp.data.vocabulary import (DEFAULT_OOV_TOKEN, DEFAULT_PADDING_TOKEN,
                                       Vocabulary)
+from allennlp.models.archival import load_archive
 from allennlp.models.model import Model
 from allennlp.modules import (FeedForward, Seq2SeqEncoder, TextFieldEmbedder,
                               TimeDistributed)
@@ -41,11 +42,13 @@ class TopicRNN(Model):
         The feedforward network to produce the parameters for the variational distribution.
     topic_dim: ``int``
         The number of latent topics to use.
-    freeze_feature_extraction: ``bool``
+    freeze_feature_extraction: ``bool``, optional
         If true, the encoding of text as well as learned topics will be frozen.
-    classification_mode: ``bool``
+    classification_mode: ``bool``, optional
         If true, the model will output cross entropy loss w.r.t sentiment instead of
         prediction the rest of the sequence.
+    pretrained_file: ``str``, optional
+        If provided, will initialize the model with the weights provided in this file.
     initializer : ``InitializerApplicator``, optional (default=``InitializerApplicator()``)
         Used to initialize the model parameters.
     regularizer : ``RegularizerApplicator``, optional (default=``None``)
@@ -56,110 +59,125 @@ class TopicRNN(Model):
                  text_encoder: Seq2SeqEncoder,
                  variational_autoencoder: FeedForward = None,
                  sentiment_classifier: FeedForward = None,
-                 vae_hidden_size: int = 128,
                  topic_dim: int = 20,
                  freeze_feature_extraction: bool = False,
                  classification_mode: bool = False,
+                 pretrained_file: str = None,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(TopicRNN, self).__init__(vocab, regularizer)
 
-        # TODO: Sanity checks.
-
-        # TODO: Categorical Accuracy for classification.
         self.metrics ={
             'perplexity': Perplexity(),
             'cross_entropy': Average(),
             'negative_kl_divergence': Average()
         }
 
+        self.classification_mode = classification_mode
         if classification_mode:
             self.metrics['sentiment'] = CategoricalAccuracy()
 
-        self.text_field_embedder = text_field_embedder
-        self.vocab_size = self.vocab.get_vocab_size("tokens")
-        self.text_encoder = text_encoder
-        self.vae_hidden_size = vae_hidden_size
-        self.classification_mode = classification_mode
-        self.topic_dim = topic_dim
-        self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
-                                                                  self.vocab_size))
-
-        # Compute stop indices in the normal vocab space to prevent stop words
-        # from contributing to the topic additions.
-        self.tokens_to_index = vocab.get_token_to_index_vocabulary()
-        assert self.tokens_to_index[DEFAULT_PADDING_TOKEN] == 0 and self.tokens_to_index[DEFAULT_OOV_TOKEN] == 1
-        for token, _ in self.tokens_to_index.items():
-            if token not in STOP_WORDS:
-                vocab.add_token_to_namespace(token, "stopless")
-
-        self.stop_indices = torch.LongTensor([vocab.get_token_index(stop) for stop in STOP_WORDS])
-
-        # Learnable topics.
-        # TODO: How should these be initialized?
-        self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
-
-        # mu: The mean of the variational distribution.
-        self.w_mu = nn.Parameter(torch.rand(topic_dim))
-        self.a_mu = nn.Parameter(torch.rand(topic_dim))
-
-        # sigma: The root standard deviation of the variational distribution.
-        self.w_sigma = nn.Parameter(torch.rand(topic_dim))
-        self.a_sigma = nn.Parameter(torch.rand(topic_dim))
-
-        # noise: used when sampling.
-        self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
-
-        stopless_dim = vocab.get_vocab_size("stopless")
-        self.variational_autoencoder = variational_autoencoder or FeedForward(
-            # Takes as input the word frequencies in the stopless dimension and projects
-            # the word frequencies into a latent topic representation.
+        if pretrained_file:
+            archive = load_archive(pretrained_file)
+            pretrained_model = archive.model
+            self._init_from_archive(pretrained_model)
+        else:
+            # Model parameter definition.
             #
-            # Each latent representation will help tune the variational dist.'s parameters.
-            stopless_dim,
-            2,
-            [vae_hidden_size, topic_dim],
-            torch.nn.ReLU(),
-        )
+            # Defaults reflect Dieng et al.'s decisions when training their semi-unsupervised
+            # IMDB sentiment classifier.
+            self.text_field_embedder = text_field_embedder
+            self.vocab_size = self.vocab.get_vocab_size("tokens")
+            self.text_encoder = text_encoder
+            self.topic_dim = topic_dim
+            self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
+                                                                    self.vocab_size))
 
-        # It is most convenient to define the classifier after optionally freezing the parameters
-        # to prevent accidentally freezing it.
+            self.tokens_to_index = vocab.get_token_to_index_vocabulary()
+
+            # This step should only ever be performed ONCE.
+            # When running allennlp train, the vocabulary will be constructed before the model instantiation, but
+            # we can't create the stopless namespace until we get here.
+            # Check if there already exists a stopless namespace: if so refrain from altering it.
+            if "stopless" not in vocab._token_to_index.keys():
+                assert self.tokens_to_index[DEFAULT_PADDING_TOKEN] == 0 and self.tokens_to_index[DEFAULT_OOV_TOKEN] == 1
+                for token, _ in self.tokens_to_index.items():
+                    if token not in STOP_WORDS:
+                        vocab.add_token_to_namespace(token, "stopless")
+
+                # Since a vocabulary with the stopless namespace hasn't been saved, save one for convienience.
+                vocab.save_to_files("vocabulary")
+
+            # Compute stop indices in the normal vocab space to prevent stop words
+            # from contributing to the topic additions.
+            self.stop_indices = torch.LongTensor([vocab.get_token_index(stop) for stop in STOP_WORDS])
+
+            # Learnable topics.
+            # TODO: How should these be initialized?
+            self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
+
+            # mu: The mean of the variational distribution.
+            self.w_mu = nn.Parameter(torch.rand(topic_dim))
+            self.a_mu = nn.Parameter(torch.rand(topic_dim))
+
+            # sigma: The root standard deviation of the variational distribution.
+            self.w_sigma = nn.Parameter(torch.rand(topic_dim))
+            self.a_sigma = nn.Parameter(torch.rand(topic_dim))
+
+            # noise: used when sampling.
+            self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
+
+            stopless_dim = vocab.get_vocab_size("stopless")
+            self.variational_autoencoder = variational_autoencoder or FeedForward(
+                # Takes as input the word frequencies in the stopless dimension and projects
+                # the word frequencies into a latent topic representation.
+                #
+                # Each latent representation will help tune the variational dist.'s parameters.
+                stopless_dim,
+                3,
+                [500, 500, topic_dim],
+                torch.nn.ReLU(),
+            )
+
+            # The shape for the feature vector for sentiment classification.
+            # (RNN Hidden Size + Inference Network output dimension).
+            sentiment_input_size = text_encoder.get_output_dim() + topic_dim
+            self.sentiment_classifier = sentiment_classifier or FeedForward(
+                # As done by the paper; a simple single layer with 50 hidden units
+                # and sigmoid activation for sentiment classification.
+                sentiment_input_size,
+                2,
+                [50, 2],
+                torch.nn.Sigmoid(),
+            )
+
         if freeze_feature_extraction:
-            for param in self.parameters():
-                param.requires_grad = False
-
-        # RNN Hidden Size + Inference Network output dimension.
-        sentiment_input_size = text_encoder.get_output_dim() + vae_hidden_size * topic_dim
-        self.sentiment_classifier = sentiment_classifier or FeedForward(
-            # Takes as input the encoded word frequencies along with the terminal RNN hidden state
-            # to perform sentiment classification.
-            sentiment_input_size,
-            2,
-            [sentiment_input_size, 2],  # Two classes for positive & negative sentiment.
-            torch.nn.ReLU(),
-        )
-
-        # Prevent gradients from passing through the RNNs / VAE to test if they're good
-        # feature extractors.
-        if freeze_feature_extraction:
-            for _, parameter in self.named_parameters():
-                parameter.requires_grad_(False)
-
-        # The shape for the feature vector for sentiment classification.
-        # (RNN Hidden Size + Inference Network output dimension).
-        sentiment_input_size = text_encoder.get_output_dim() + topic_dim
-        self.sentiment_classifier = sentiment_classifier or FeedForward(
-            # As done by the paper; a simple single layer with 50 hidden units
-            # and sigmoid activation for sentiment classification.
-            sentiment_input_size,
-            2,
-            [50, 2],
-            torch.nn.Sigmoid(),
-        )
+            # Freeze the RNN and VAE pipeline so that only the classifier is trained.
+            for name, param in self.named_parameters():
+                if "sentiment_classifier" not in name:
+                    param.requires_grad = False
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
         initializer(self)
+
+    def _init_from_archive(self, pretrained_model: Model):
+        """ Given a TopicRNN instance, take its weights. """
+        self.text_field_embedder = pretrained_model.text_field_embedder
+        self.vocab_size = pretrained_model.vocab_size
+        self.text_encoder = pretrained_model.text_encoder
+        self.topic_dim = pretrained_model.topic_dim
+        self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
+        self.tokens_to_index = pretrained_model.tokens_to_index
+        self.stop_indices = pretrained_model.stop_indices
+        self.beta = pretrained_model.beta
+        self.w_mu = pretrained_model.w_mu
+        self.a_mu = pretrained_model.a_mu
+        self.w_sigma = pretrained_model.w_sigma
+        self.a_sigma = pretrained_model.a_sigma
+        self.noise = pretrained_model.noise
+        self.variational_autoencoder = pretrained_model.variational_autoencoder
+        self.sentiment_classifier = pretrained_model.sentiment_classifier
 
     @overrides
     def forward(self,  # type: ignore
@@ -319,23 +337,3 @@ class TopicRNN(Model):
         # TODO: What makes sense for a decode for TopicRNN?
         return output_dict
 
-    @classmethod
-    def from_params(cls, vocab: Vocabulary, params: Params) -> 'TopicRNN':
-        embedder_params = params.pop("text_field_embedder")
-        text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
-        text_encoder = Seq2SeqEncoder.from_params(params.pop("text_encoder"))
-        topic_dim = params.pop("topic_dim", 20)
-        freeze_feature_extraction = params.pop("freeze_feature_extraction", False)
-        vae_hidden_size = params.pop("vae_hidden_size", 128)
-        classification_mode = params.pop("classification_mode", False)
-        initializer = InitializerApplicator.from_params(params.pop('initializer', []))
-        regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
-        return cls(vocab=vocab,
-                   text_field_embedder=text_field_embedder,
-                   text_encoder=text_encoder,
-                   topic_dim=topic_dim,
-                   freeze_feature_extraction=freeze_feature_extraction,
-                   vae_hidden_size=vae_hidden_size,
-                   classification_mode=classification_mode,
-                   initializer=initializer,
-                   regularizer=regularizer)

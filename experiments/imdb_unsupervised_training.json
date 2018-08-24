@@ -9,10 +9,15 @@
   "train_data_path": "data/train_unsup.jsonl",
   "validation_data_path": "data/valid_unsup.jsonl",
   "vocabulary": {
-    "max_vocab_size": 5000
+    "max_vocab_size": 5000,
+    "tokens_to_add": {
+      "labels": ["positive", "negative"]
+    }
   },
   "model": {
     "type": "topic_rnn",
+    "classification_mode": false,
+    "freeze_feature_extraction": false,
     "text_field_embedder": {
       "tokens": {
         "type": "embedding",
@@ -28,7 +33,6 @@
       "num_layers": 2
     },
     "topic_dim": 200,
-    "vae_hidden_size": 500
   },
   "iterator": {
     "type": "basic",
@@ -36,7 +40,7 @@
   },
 
   "trainer": {
-    "num_epochs": 20,
+    "num_epochs": 50,
     "patience": 10,
     "cuda_device": 0,
     "grad_clipping": 0.5,
