@@ -9,6 +9,8 @@ from allennlp.models.archival import load_archive
 from allennlp.models.model import Model
 from allennlp.modules import (FeedForward, Seq2SeqEncoder, TextFieldEmbedder,
                               TimeDistributed)
+from allennlp.modules.seq2vec_encoders.pytorch_seq2vec_wrapper import \
+    PytorchSeq2VecWrapper
 from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
@@ -68,7 +70,8 @@ class TopicRNN(Model):
         self.metrics = {
             'perplexity': Perplexity(),
             'cross_entropy': Average(),
-            'negative_kl_divergence': Average()
+            'negative_kl_divergence': Average(),
+            'mapped_term_freq_sum': Average()
         }
 
         self.classification_mode = classification_mode
@@ -115,12 +118,10 @@ class TopicRNN(Model):
             self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
 
             # mu: The mean of the variational distribution.
-            self.w_mu = nn.Parameter(torch.rand(topic_dim))
-            self.a_mu = nn.Parameter(torch.rand(topic_dim))
+            self.mu_linear = nn.Linear(topic_dim, topic_dim)
 
             # sigma: The root standard deviation of the variational distribution.
-            self.w_sigma = nn.Parameter(torch.rand(topic_dim))
-            self.a_sigma = nn.Parameter(torch.rand(topic_dim))
+            self.sigma_linear = nn.Linear(topic_dim, topic_dim)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -164,15 +165,18 @@ class TopicRNN(Model):
         self.text_field_embedder = pretrained_model.text_field_embedder
         self.vocab_size = pretrained_model.vocab_size
         self.text_encoder = pretrained_model.text_encoder
+
+        # This function is only to be invoved when needing to classify.
+        # To avoid manually dealing with padding, instantiate a Seq2Vec instead.
+        self.text_to_vec = PytorchSeq2VecWrapper(self.text_encoder._modules['_module'])
+
         self.topic_dim = pretrained_model.topic_dim
         self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
         self.tokens_to_index = pretrained_model.tokens_to_index
         self.stop_indices = pretrained_model.stop_indices
         self.beta = pretrained_model.beta
-        self.w_mu = pretrained_model.w_mu
-        self.a_mu = pretrained_model.a_mu
-        self.w_sigma = pretrained_model.w_sigma
-        self.a_sigma = pretrained_model.a_sigma
+        self.mu_linear = pretrained_model.mu_linear
+        self.sigma_linear = pretrained_model.sigma_linear
         self.noise = pretrained_model.noise
         self.variational_autoencoder = pretrained_model.variational_autoencoder
         self.sentiment_classifier = pretrained_model.sentiment_classifier
@@ -227,9 +231,10 @@ class TopicRNN(Model):
         # 2. Compute Gaussian parameters.
         stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum())
 
-        mu = self.w_mu * mapped_term_frequencies + self.a_mu
-        log_sigma = self.w_sigma * mapped_term_frequencies + self.a_sigma
+        mu = self.mu_linear(mapped_term_frequencies)
+        log_sigma = self.sigma_linear(mapped_term_frequencies)
 
         # 3. Compute topic proportions given Gaussian parameters.
         theta = mu + torch.exp(log_sigma) * epsilon
@@ -289,12 +294,13 @@ class TopicRNN(Model):
         # Shape: (batch, sequence length, hidden size)
         embedded_input = self.text_field_embedder(frequency_tokens)
         input_mask = util.get_text_field_mask(frequency_tokens)
-        encoded_input = self.text_encoder(embedded_input, input_mask)
+
+        # Use text_to_vec to avoid dealing with padding.
+        encoded_input = self.text_to_vec(embedded_input, input_mask)
 
         # Construct feature vector.
         # Shape: (batch, RNN hidden size + number of topics)
-        encoded_input_final_hidden = encoded_input[:, -1]
-        sentiment_features = torch.cat([encoded_input_final_hidden, mapped_term_frequencies], dim=-1)
+        sentiment_features = torch.cat([encoded_input, mapped_term_frequencies], dim=-1)
 
         # Classify.
         logits = self.sentiment_classifier(sentiment_features)
@@ -311,10 +317,10 @@ class TopicRNN(Model):
         batch_size = frequency_tokens['tokens'].size(0)
         res = torch.zeros(batch_size, self.vocab.get_vocab_size("stopless"))
         for i, row in enumerate(frequency_tokens['tokens']):
-
             # A conversion between namespaces (full vocab to stopless) is necessary.
             words = [self.vocab.get_token_from_index(index) for index in row.tolist()]
             word_counts = dict(Counter(words))
+            num_words = sum(word_counts.values())
 
             # TODO: Make this faster.
             for word, count in word_counts.items():
@@ -322,7 +328,7 @@ class TopicRNN(Model):
                     index = self.vocab.get_token_index(word, "stopless")
 
                     # Exclude padding token from influencing inference.
-                    res[i][index] = count * int(index > 0)
+                    res[i][index] = (count * int(index > 0)) / num_words
 
         return res
 
