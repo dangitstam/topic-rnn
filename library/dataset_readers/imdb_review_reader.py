@@ -1,11 +1,10 @@
 import logging
 from typing import Dict
 
-from allennlp.common import Params
 from allennlp.common.file_utils import cached_path
 from allennlp.common.util import END_SYMBOL, START_SYMBOL
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import TextField
+from allennlp.data.fields import LabelField, TextField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenIndexer
 from allennlp.data.tokenizers import Tokenizer, WordTokenizer
@@ -115,18 +114,6 @@ class IMDBReviewLanguageModelingReader(DatasetReader):
 
                     yield Instance(example)
 
-    @classmethod
-    def from_params(cls, params: Params) -> 'IMDBLanguageModelingReader':
-        lazy = params.pop('lazy', False)
-        tokenizer = Tokenizer.from_params(params.pop('tokenizer', {}))
-        token_indexers = TokenIndexer.dict_from_params(params.pop('token_indexers', {}))
-        words_per_instance = params.pop('words_per_instance', None)
-        params.assert_empty(cls.__name__)
-        return cls(lazy=lazy,
-                   tokenizer=tokenizer,
-                   token_indexers=token_indexers,
-                   words_per_instance=words_per_instance)
-
 
 @DatasetReader.register("imdb_review_reader")
 class IMDBReviewReader(DatasetReader):
@@ -197,6 +184,8 @@ class IMDBReviewReader(DatasetReader):
                 example = ujson.loads(line)
                 example_text = example['text']
                 example_text_tokenized = self._tokenizer.tokenize(example_text)
+                example_sentiment = "positive" if example['sentiment'] >= 5 else "negative"
+                example_sentiment_field = LabelField(example_sentiment)
 
                 # Each review will receive the entire encoded review.
                 frequency_field = TextField(example_text_tokenized, self._token_indexers)
@@ -209,16 +198,5 @@ class IMDBReviewReader(DatasetReader):
                     output_field = TextField(tokenized_string[1:], self._token_indexers)
                     yield Instance({'input_tokens': input_field,
                                     'output_tokens': output_field,
-                                    'frequency_tokens': frequency_field})
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'IMDBReviewReader':
-        lazy = params.pop('lazy', False)
-        tokenizer = Tokenizer.from_params(params.pop('tokenizer', {}))
-        token_indexers = TokenIndexer.dict_from_params(params.pop('token_indexers', {}))
-        words_per_instance = params.pop('words_per_instance', None)
-        params.assert_empty(cls.__name__)
-        return cls(lazy=lazy,
-                   tokenizer=tokenizer,
-                   token_indexers=token_indexers,
-                   words_per_instance=words_per_instance)
+                                    'frequency_tokens': frequency_field,
+                                    'sentiment': example_sentiment_field})

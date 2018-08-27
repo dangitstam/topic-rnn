@@ -1,18 +1,21 @@
 {
   "dataset_reader": {
-    "type": "imdb_review_language_modeling_reader",
+    "type": "imdb_review_reader",
     "tokenizer": {
       "type": "word"
     },
     "words_per_instance": 35
   },
-  "train_data_path": "data/train_unlabeled.jsonl",
-  "validation_data_path": "tests/fixtures/smoke.jsonl",
+  "train_data_path": "tests/fixtures/smoke_labeled.jsonl",
+  "validation_data_path": "tests/fixtures/smoke_labeled.jsonl",
   "vocabulary": {
-    "max_vocab_size": 10000
+    "directory_path": "./vocabulary"
   },
   "model": {
     "type": "topic_rnn",
+    "classification_mode": true,
+    "freeze_feature_extraction": true,
+    "pretrained_file": "/tmp/topic_rnn_imdb/model.tar.gz",
     "text_field_embedder": {
       "tokens": {
         "type": "embedding",
@@ -22,22 +25,23 @@
       }
     },
     "text_encoder": {
-      "type": "gru",
+      "type": "rnn",
       "input_size": 100,
-      "hidden_size": 512
+      "hidden_size": 128,
+      "num_layers": 2
     },
-    "topic_dim": 50
+    "topic_dim": 10
   },
   "iterator": {
     "type": "basic",
-    "batch_size": 80
+    "batch_size": 64
   },
 
   "trainer": {
-    "num_epochs": 25,
+    "num_epochs": 2,
     "patience": 10,
-    "cuda_device": 0,
-    "grad_clipping": 0.5,
+    "cuda_device": -1,
+    "grad_clipping": 5.0,
     "optimizer": {
       "type": "adam"
     }
