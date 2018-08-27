@@ -15,7 +15,7 @@ The system is built with PyTorch and AllenNLP, which are the main dependencies.
 ### Prerequisites
 
 * Python 3.6 (3.6.5+ recommended)
-* AllenNLP 0.5.1
+* AllenNLP 0.6.0
 
 ### Installing
 
