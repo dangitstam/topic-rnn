@@ -224,6 +224,14 @@ class TopicRNN(Model):
         # Shape: (batch x sequence length x vocabulary size)
         logits = self.vocabulary_projection_layer(encoded_input)
 
+        # Predict stopwords.
+        # Note that for every logit in the projection into the vocabulary, the stop indicator
+        # will be the same within time steps. This is because we predict whether forthcoming
+        # words are stops or not and zero out topic additions for those time steps.
+        stopword_logits = sigmoid(self.stopword_pojection_layer(encoded_input))
+        stopword_predictions = torch.argmax(stopword_logits, dim=-1)
+        stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
+
         # Word frequency vectors and noise aren't generated with the model. If the model
         # is running on a GPU, these tensors need to be moved to the correct device.
         device = logits.device
@@ -259,10 +267,11 @@ class TopicRNN(Model):
             # II. Compute cross entropy against next words for the current sample of noise.
             # Padding and OOV tokens are indexed at 0 and 1.
             topic_additions = torch.mm(theta, self.beta)
-            topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
-            topic_additions.t()[0] = 0                  # Padding will be treated as stops.
-            topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
-            topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
+            topic_additions.t()[0] = 0  # Padding will be treated as stops.
+            topic_additions.t()[1] = 0  # Unknowns will be treated as stops.
+
+            # Stop words have no contribution via topics.
+            topic_additions = (1 - stopword_predictions).float() * topic_additions.unsqueeze(1).expand_as(logits)
             cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + topic_additions,
                                                                          relevant_output,
                                                                          relevant_output_mask)
@@ -272,7 +281,6 @@ class TopicRNN(Model):
         averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
 
         # III. Compute stopword probabilities and gear RNN hidden states toward learning them. 
-        stopword_logits = sigmoid(self.stopword_pojection_layer(encoded_input))
         relevant_stopword_output = self._compute_stopword_mask(output_tokens).contiguous().to(device=device)
         stopword_loss = util.sequence_cross_entropy_with_logits(stopword_logits,
                                                                 relevant_stopword_output,
