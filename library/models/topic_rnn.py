@@ -15,6 +15,7 @@ from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.nn.functional import sigmoid
 from torch.nn.modules.linear import Linear
 
 from library.dataset_readers.util import STOP_WORDS
@@ -58,6 +59,7 @@ class TopicRNN(Model):
                  text_field_embedder: TextFieldEmbedder,
                  text_encoder: Seq2SeqEncoder,
                  variational_autoencoder: FeedForward = None,
+                 stopword_pojection_layer: FeedForward = None,
                  sentiment_classifier: FeedForward = None,
                  topic_dim: int = 20,
                  freeze_feature_extraction: bool = False,
@@ -68,9 +70,7 @@ class TopicRNN(Model):
         super(TopicRNN, self).__init__(vocab, regularizer)
 
         self.metrics = {
-            'perplexity': Perplexity(),
             'cross_entropy': Average(),
-            'negative_kl_divergence': Average(),
             'mapped_term_freq_sum': Average()
         }
 
@@ -94,6 +94,10 @@ class TopicRNN(Model):
             self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
                                                                       self.vocab_size))
 
+            # Parameter gamma from the paper; projects hidden states into binary logits for whether a
+            # word is a stopword.
+            self.stopword_pojection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(), 2))
+
             self.tokens_to_index = vocab.get_token_to_index_vocabulary()
 
             # This step should only ever be performed ONCE.
@@ -101,7 +105,8 @@ class TopicRNN(Model):
             # we can't create the stopless namespace until we get here.
             # Check if there already exists a stopless namespace: if so refrain from altering it.
             if "stopless" not in vocab._token_to_index.keys():
-                assert self.tokens_to_index[DEFAULT_PADDING_TOKEN] == 0 and self.tokens_to_index[DEFAULT_OOV_TOKEN] == 1
+                assert self.tokens_to_index[DEFAULT_PADDING_TOKEN] == 0 and \
+                       self.tokens_to_index[DEFAULT_OOV_TOKEN] == 1
                 for token, _ in self.tokens_to_index.items():
                     if token not in STOP_WORDS:
                         vocab.add_token_to_namespace(token, "stopless")
@@ -158,6 +163,8 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
+        self.num_samples = 10
+
         initializer(self)
 
     def _init_from_archive(self, pretrained_model: Model):
@@ -208,6 +215,7 @@ class TopicRNN(Model):
             A scalar loss to be optimised.
         """
         output_dict = {}
+        likelihood = None
 
         # Encode the input text.
         # Shape: (batch x sequence length x hidden size)
@@ -215,7 +223,7 @@ class TopicRNN(Model):
         input_mask = util.get_text_field_mask(input_tokens)
         encoded_input = self.text_encoder(embedded_input, input_mask)
 
-        # Initial projection into vocabulary space.
+        # Initial projection into vocabulary space, v^T * h_t.
         # Shape: (batch x sequence length x vocabulary size)
         logits = self.vocabulary_projection_layer(encoded_input)
 
@@ -223,61 +231,64 @@ class TopicRNN(Model):
         # is running on a GPU, these tensors need to be moved to the correct device.
         device = logits.device
 
-        # Compute the topic additions when frequency tokens are available.
+        # Mask the output for proper loss calculation.
+        output_mask = util.get_text_field_mask(output_tokens)
+        relevant_output = output_tokens['tokens'].contiguous()
+        relevant_output_mask = output_mask.contiguous()
 
-        # 1. Compute noise for sampling.
-        epsilon = self.noise.rsample().to(device=device)
-
-        # 2. Compute Gaussian parameters.
+        # Compute Gaussian parameters.
         stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
         self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum())
-
         mu = self.mu_linear(mapped_term_frequencies)
         log_sigma = self.sigma_linear(mapped_term_frequencies)
 
-        # 3. Compute topic proportions given Gaussian parameters.
-        theta = mu + torch.exp(log_sigma) * epsilon
+        aggregate_theta_probability = 0
+        aggregate_cross_entropy_loss = 0
+        for _ in range(self.num_samples):
 
-        # Padding and OOV tokens are indexed at 0 and 1.
-        topic_additions = torch.mm(theta, self.beta)
-        topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
-        topic_additions.t()[0] = 0                  # Padding will be treated as stops.
-        topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
-        topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
-        logits += topic_additions
+            # Compute noise for sampling.
+            epsilon = self.noise.rsample().to(device=device)
 
-        if output_tokens:
-            # Mask the output for proper loss calculation.
-            output_mask = util.get_text_field_mask(output_tokens)
-            relevant_output = output_tokens['tokens'].contiguous()
-            relevant_output_mask = output_mask.contiguous()
+            # Compute noisy topic proportions given Gaussian parameters.
+            theta = mu + torch.exp(log_sigma) * epsilon
 
-            # Compute KL-Divergence.
-            # A closed-form solution exists since we're assuming q is drawn
-            # from a normal distribution.
-            kl_divergence = 1 + 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
+            # I. Compute the integral of q(theta) log P(theta)
+            aggregate_theta_probability += theta ** 2
 
-            # Sum along the topic dimension.
-            kl_divergence = torch.sum(kl_divergence) / 2
-
-            # Sampling log loss with L = 1
-            # TODO: Should this be extended to support arbitrary L?
-            cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits, relevant_output,
+            # II. Compute cross entropy against next words for the current sample of noise.
+            # Padding and OOV tokens are indexed at 0 and 1.
+            topic_additions = torch.mm(theta, self.beta)
+            topic_additions.t()[self.stop_indices] = 0  # Stop words have no contribution via topics.
+            topic_additions.t()[0] = 0                  # Padding will be treated as stops.
+            topic_additions.t()[1] = 0                  # Unknowns will be treated as stops.
+            topic_additions = topic_additions.unsqueeze(1).expand_as(logits)
+            cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + topic_additions,
+                                                                         relevant_output,
                                                                          relevant_output_mask)
+            aggregate_cross_entropy_loss += cross_entropy_loss
 
-            if self.classification_mode:
-                output_dict['loss'] = self._classify_sentiment(frequency_tokens, mapped_term_frequencies, sentiment)
-            else:
-                output_dict['loss'] = -kl_divergence + cross_entropy_loss
+        averaged_theta_probability = -aggregate_theta_probability.sum() / (2 * self.num_samples)
+        averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
 
-            # Compute perplexity.
-            self.metrics['perplexity'](logits, relevant_output, relevant_output_mask)
+        # III. Compute stopword probabilities and gear RNN hidden states toward learning them. 
+        stopword_logits = sigmoid(self.stopword_pojection_layer(encoded_input))
+        relevant_stopword_output = self._compute_stopword_mask(output_tokens).contiguous().to(device=device)
+        stopword_loss = util.sequence_cross_entropy_with_logits(stopword_logits,
+                                                                relevant_stopword_output,
+                                                                relevant_output_mask)
 
-            # It's nice to see how the model does as an actual language model vs.
-            # the KL-Divergence and Cross Entropy sum.
-            self.metrics['cross_entropy'](cross_entropy_loss.item())
-            self.metrics['negative_kl_divergence'](-(kl_divergence.item()))
+        # IV. Compute the integral q(theta) log q(theta).
+        log_sigma_sum = log_sigma.sum()
+
+        if self.classification_mode:
+            output_dict['loss'] = self._classify_sentiment(frequency_tokens, mapped_term_frequencies, sentiment)
+        else:
+            # Negate everything but the cross entropy loss since it is already defined as negative log likelihood.
+            output_dict['loss'] = -averaged_theta_probability + averaged_cross_entropy_loss - stopword_loss - log_sigma_sum
+
+        # It's nice to see how the model does as a language model.
+        self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
 
         return output_dict
 
@@ -329,6 +340,17 @@ class TopicRNN(Model):
 
                     # Exclude padding token from influencing inference.
                     res[i][index] = (count * int(index > 0)) / num_words
+
+        return res
+
+    def _compute_stopword_mask(self, output_tokens: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:
+        """ Given a set of output tokens, compute a mask where 1 indicates stopword presence and 0
+            indicates stopword absence.
+        """
+        res = torch.zeros_like(output_tokens['tokens'])
+        for i, row in enumerate(output_tokens['tokens']):
+            words = [self.vocab.get_token_from_index(index) for index in row.tolist()]
+            res[i] = torch.LongTensor([int(word in STOP_WORDS) for word in words])
 
         return res
 
