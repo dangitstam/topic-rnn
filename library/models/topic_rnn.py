@@ -284,8 +284,8 @@ class TopicRNN(Model):
         if self.classification_mode:
             output_dict['loss'] = self._classify_sentiment(frequency_tokens, mapped_term_frequencies, sentiment)
         else:
-            # Negate everything but the cross entropy loss since it is already defined as negative log likelihood.
-            output_dict['loss'] = -averaged_theta_probability + averaged_cross_entropy_loss - stopword_loss - log_sigma_sum
+            # Negate everything but the cross entropy losses since they're already computed as negative log likelihood.
+            output_dict['loss'] = -averaged_theta_probability + averaged_cross_entropy_loss + stopword_loss - log_sigma_sum
 
         # It's nice to see how the model does as a language model.
         self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
