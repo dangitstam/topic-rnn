@@ -59,7 +59,6 @@ class TopicRNN(Model):
                  text_field_embedder: TextFieldEmbedder,
                  text_encoder: Seq2SeqEncoder,
                  variational_autoencoder: FeedForward = None,
-                 stopword_pojection_layer: FeedForward = None,
                  sentiment_classifier: FeedForward = None,
                  topic_dim: int = 20,
                  freeze_feature_extraction: bool = False,
@@ -239,7 +238,10 @@ class TopicRNN(Model):
         # Compute Gaussian parameters.
         stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
-        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum())
+
+        # If the inference network ever learns to output just 0, something has gone wrong.
+        assert mapped_term_frequencies.sum().item() > 0
+
         mu = self.mu_linear(mapped_term_frequencies)
         log_sigma = self.sigma_linear(mapped_term_frequencies)
 
