@@ -70,7 +70,6 @@ class TopicRNN(Model):
 
         self.metrics = {
             'cross_entropy': Average(),
-            'mapped_term_freq_sum': Average()
         }
 
         self.classification_mode = classification_mode
