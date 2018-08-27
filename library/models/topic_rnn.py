@@ -214,7 +214,6 @@ class TopicRNN(Model):
             A scalar loss to be optimised.
         """
         output_dict = {}
-        likelihood = None
 
         # Encode the input text.
         # Shape: (batch x sequence length x hidden size)
