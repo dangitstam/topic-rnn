@@ -94,7 +94,7 @@ class TopicRNN(Model):
 
             # Parameter gamma from the paper; projects hidden states into binary logits for whether a
             # word is a stopword.
-            self.stopword_pojection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(), 2))
+            self.stopword_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(), 2))
 
             self.tokens_to_index = vocab.get_token_to_index_vocabulary()
 
@@ -177,6 +177,7 @@ class TopicRNN(Model):
 
         self.topic_dim = pretrained_model.topic_dim
         self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
+        self.stopword_projection_layer = pretrained_model.stopword_projection_layer  # TODO: Typo
         self.tokens_to_index = pretrained_model.tokens_to_index
         self.stop_indices = pretrained_model.stop_indices
         self.beta = pretrained_model.beta
@@ -228,7 +229,7 @@ class TopicRNN(Model):
         # Note that for every logit in the projection into the vocabulary, the stop indicator
         # will be the same within time steps. This is because we predict whether forthcoming
         # words are stops or not and zero out topic additions for those time steps.
-        stopword_logits = sigmoid(self.stopword_pojection_layer(encoded_input))
+        stopword_logits = sigmoid(self.stopword_projection_layer(encoded_input))
         stopword_predictions = torch.argmax(stopword_logits, dim=-1)
         stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
