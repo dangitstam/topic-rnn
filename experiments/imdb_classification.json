@@ -4,7 +4,8 @@
     "tokenizer": {
       "type": "word"
     },
-    "words_per_instance": 35
+    "words_per_instance": 35,
+    "classification_mode": true
   },
   "train_data_path": "data/train_labeled.jsonl",
   "validation_data_path": "data/valid_labeled.jsonl",
@@ -15,7 +16,7 @@
     "type": "topic_rnn",
     "classification_mode": true,
     "freeze_feature_extraction": true,
-    "pretrained_file": "saved_models/topic_rnn/model.tar.gz",
+    "pretrained_file": "saved_models/topic_rnn/unsupervised/model.tar.gz",
     "text_field_embedder": {
       "tokens": {
         "type": "embedding",
@@ -40,7 +41,7 @@
   "trainer": {
     "num_epochs": 50,
     "patience": 10,
-    "cuda_device": 0,
+    "cuda_device": 1,
     "grad_clipping": 0.5,
     "optimizer": {
       "type": "adam"

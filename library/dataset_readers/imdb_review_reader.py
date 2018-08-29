@@ -152,7 +152,8 @@ class IMDBReviewReader(DatasetReader):
                  lazy: bool = False,
                  tokenizer: Tokenizer = None,
                  token_indexers: Dict[str, TokenIndexer] = None,
-                 words_per_instance: int = 35
+                 words_per_instance: int = 35,
+                 classification_mode=False
                 ) -> None:
         super().__init__(lazy)
         self._tokenizer = tokenizer or WordTokenizer(
@@ -164,6 +165,7 @@ class IMDBReviewReader(DatasetReader):
         }
 
         self._words_per_instance = words_per_instance
+        self._classification_mode = classification_mode
 
     @overrides
     def _read(self, file_path):
@@ -192,6 +194,10 @@ class IMDBReviewReader(DatasetReader):
                 tokenized_strings = []
                 for index in range(0, len(example_text_tokenized) - num_tokens, num_tokens - 1):
                     tokenized_strings.append(example_text_tokenized[index:(index + num_tokens)])
+
+                    # By breaking early when training a classifier, we prevent training on duplicates.
+                    if self._classification_mode:
+                        break
 
                 for tokenized_string in tokenized_strings:
                     input_field = TextField(tokenized_string[:-1], self._token_indexers)
