@@ -70,6 +70,7 @@ class TopicRNN(Model):
 
         self.metrics = {
             'cross_entropy': Average(),
+            'negative_kl_divergence': Average()
         }
 
         self.classification_mode = classification_mode
@@ -252,7 +253,14 @@ class TopicRNN(Model):
         mu = self.mu_linear(mapped_term_frequencies)
         log_sigma = self.sigma_linear(mapped_term_frequencies)
 
-        aggregate_theta_probability = 0
+        # I .Compute KL-Divergence.
+        # A closed-form solution exists since we're assuming q is drawn
+        # from a normal distribution.
+        kl_divergence = 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
+
+        # Sum along the topic dimension and add const..
+        kl_divergence = (self.topic_dim + torch.sum(kl_divergence)) / 2
+
         aggregate_cross_entropy_loss = 0
         for _ in range(self.num_samples):
 
@@ -262,8 +270,6 @@ class TopicRNN(Model):
             # Compute noisy topic proportions given Gaussian parameters.
             theta = mu + torch.exp(log_sigma) * epsilon
 
-            # I. Compute the integral of q(theta) log P(theta)
-            aggregate_theta_probability += theta ** 2
 
             # II. Compute cross entropy against next words for the current sample of noise.
             # Padding and OOV tokens are indexed at 0 and 1.
@@ -278,7 +284,6 @@ class TopicRNN(Model):
                                                                          relevant_output_mask)
             aggregate_cross_entropy_loss += cross_entropy_loss
 
-        averaged_theta_probability = -aggregate_theta_probability.sum() / (2 * self.num_samples)
         averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
 
         # III. Compute stopword probabilities and gear RNN hidden states toward learning them. 
@@ -287,17 +292,14 @@ class TopicRNN(Model):
                                                                 relevant_stopword_output,
                                                                 relevant_output_mask)
 
-        # IV. Compute the integral q(theta) log q(theta).
-        log_sigma_sum = log_sigma.sum()
-
         if self.classification_mode:
             output_dict['loss'] = self._classify_sentiment(frequency_tokens, mapped_term_frequencies, sentiment)
         else:
-            # Negate everything but the cross entropy losses since they're already computed as negative log likelihood.
-            output_dict['loss'] = -averaged_theta_probability + averaged_cross_entropy_loss + stopword_loss - log_sigma_sum
+            output_dict['loss'] = -kl_divergence + averaged_cross_entropy_loss + stopword_loss
 
-        # It's nice to see how the model does as a language model.
+        self.metrics['negative_kl_divergence']((-kl_divergence).item())
         self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
+        self.metrics['stopword_loss'](stopword_loss.item())
 
         return output_dict
 
