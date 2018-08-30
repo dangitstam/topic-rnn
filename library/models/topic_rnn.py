@@ -257,7 +257,7 @@ class TopicRNN(Model):
         # I .Compute KL-Divergence.
         # A closed-form solution exists since we're assuming q is drawn
         # from a normal distribution.
-        kl_divergence = 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
+        kl_divergence = 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
 
         # Sum along the topic dimension and add const.
         kl_divergence = (self.topic_dim + torch.sum(kl_divergence)) / 2
