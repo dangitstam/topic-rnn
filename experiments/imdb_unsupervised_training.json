@@ -45,7 +45,8 @@
     "cuda_device": 0,
     "grad_clipping": 0.5,
     "optimizer": {
-      "type": "adam"
+      "type": "adam",
+      "lr": 0.0001
     }
   }
 }
