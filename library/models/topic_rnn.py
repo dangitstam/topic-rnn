@@ -70,7 +70,8 @@ class TopicRNN(Model):
 
         self.metrics = {
             'cross_entropy': Average(),
-            'negative_kl_divergence': Average()
+            'negative_kl_divergence': Average(),
+            'stopword_loss': Average()
         }
 
         self.classification_mode = classification_mode
@@ -162,7 +163,7 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 10
+        self.num_samples = 50
 
         initializer(self)
 
@@ -178,7 +179,7 @@ class TopicRNN(Model):
 
         self.topic_dim = pretrained_model.topic_dim
         self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
-        self.stopword_projection_layer = pretrained_model.stopword_projection_layer  # TODO: Typo
+        self.stopword_projection_layer = pretrained_model.stopword_projection_layer
         self.tokens_to_index = pretrained_model.tokens_to_index
         self.stop_indices = pretrained_model.stop_indices
         self.beta = pretrained_model.beta
@@ -258,7 +259,7 @@ class TopicRNN(Model):
         # from a normal distribution.
         kl_divergence = 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
 
-        # Sum along the topic dimension and add const..
+        # Sum along the topic dimension and add const.
         kl_divergence = (self.topic_dim + torch.sum(kl_divergence)) / 2
 
         aggregate_cross_entropy_loss = 0
