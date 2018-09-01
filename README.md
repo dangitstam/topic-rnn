@@ -6,7 +6,6 @@ Implementation of Dieng et al.'s [TopicRNN](https://arxiv.org/abs/1611.01702): a
 * A variational distribution is learned using word frequencies as input to produce the parameters for the Gaussian distribution in which each topic proportion vector `theta` of length `k` is sampled from.
 * `beta * theta` then results in the the logits over the vocabulary at the given time step that allow learned topics to be properly weighted before influencing inference of the next word. Topic additions for each word are zeroed out if the index of the logit belongs to a stop word, this allows only semantically significant words to have influence from the topics.
 * The topic additions`beta * theta` are added to the vocabulary projection of the RNN hidden `W * ht` resulting in a final distribution over the vocabulary that is normalized via SoftMax.
-* Loss is computed by optimizing ELBO; a derivation of the objective can be found [here](https://www.slideshare.net/tmasada/a-note-on-topicrnn).
 
 ## Getting Started
 
