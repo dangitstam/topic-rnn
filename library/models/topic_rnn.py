@@ -218,6 +218,7 @@ class TopicRNN(Model):
             A scalar loss to be optimised.
         """
         output_dict = {}
+        # import pdb; pdb.set_trace()
 
         # Encode the input text.
         # Shape: (batch x sequence length x hidden size)
@@ -247,7 +248,9 @@ class TopicRNN(Model):
         relevant_output_mask = output_mask.contiguous()
 
         # Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+
+        # TODO: Don't use the whole document?
+        stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
         # If the inference network ever learns to output just 0, something has gone wrong.
@@ -347,7 +350,6 @@ class TopicRNN(Model):
             # A conversion between namespaces (full vocab to stopless) is necessary.
             words = [self.vocab.get_token_from_index(index) for index in row.tolist()]
             word_counts = dict(Counter(words))
-            num_words = sum(word_counts.values())
 
             # TODO: Make this faster.
             for word, count in word_counts.items():
@@ -355,7 +357,7 @@ class TopicRNN(Model):
                     index = self.vocab.get_token_index(word, "stopless")
 
                     # Exclude padding token from influencing inference.
-                    res[i][index] = (count * int(index > 0)) / num_words
+                    res[i][index] = count * int(index > 0)
 
         return res
 
