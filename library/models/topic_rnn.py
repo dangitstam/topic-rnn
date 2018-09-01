@@ -71,7 +71,9 @@ class TopicRNN(Model):
         self.metrics = {
             'cross_entropy': Average(),
             'negative_kl_divergence': Average(),
-            'stopword_loss': Average()
+            'stopword_loss': Average(),
+            'mapped_term_freq_sum': Average(),
+            'mapped_term_freq_filled_ratio': Average(),
         }
 
         self.classification_mode = classification_mode
@@ -120,7 +122,7 @@ class TopicRNN(Model):
 
             # Learnable topics.
             # TODO: How should these be initialized?
-            self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
+            self.beta = nn.Parameter(torch.ones(topic_dim, self.vocab_size) / topic_dim)
 
             # mu: The mean of the variational distribution.
             self.mu_linear = nn.Linear(topic_dim, topic_dim)
@@ -140,7 +142,7 @@ class TopicRNN(Model):
                 stopless_dim,
                 3,
                 [500, 500, topic_dim],
-                torch.nn.ReLU(),
+                torch.nn.ReLU()
             )
 
             # The shape for the feature vector for sentiment classification.
@@ -250,6 +252,8 @@ class TopicRNN(Model):
 
         # If the inference network ever learns to output just 0, something has gone wrong.
         assert mapped_term_frequencies.sum().item() > 0
+        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
+        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.size(0) * self.topic_dim))
 
         mu = self.mu_linear(mapped_term_frequencies)
         log_sigma = self.sigma_linear(mapped_term_frequencies)
