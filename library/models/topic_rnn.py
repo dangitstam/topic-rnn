@@ -15,7 +15,6 @@ from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
-from torch.nn.functional import sigmoid
 from torch.nn.modules.linear import Linear
 
 from library.dataset_readers.util import STOP_WORDS
@@ -71,7 +70,9 @@ class TopicRNN(Model):
         self.metrics = {
             'cross_entropy': Average(),
             'negative_kl_divergence': Average(),
-            'stopword_loss': Average()
+            'stopword_loss': Average(),
+            'mapped_term_freq_sum': Average(),
+            'mapped_term_freq_filled_ratio': Average(),
         }
 
         self.classification_mode = classification_mode
@@ -120,13 +121,21 @@ class TopicRNN(Model):
 
             # Learnable topics.
             # TODO: How should these be initialized?
-            self.beta = nn.Parameter(torch.rand(topic_dim, self.vocab_size))
+            self.beta = nn.Parameter(torch.ones(topic_dim, self.vocab_size) / topic_dim)
 
             # mu: The mean of the variational distribution.
-            self.mu_linear = nn.Linear(topic_dim, topic_dim)
+            self.w_mu = nn.Parameter(torch.rand(500))
+            self.a_mu = nn.Parameter(torch.rand(topic_dim))
 
             # sigma: The root standard deviation of the variational distribution.
-            self.sigma_linear = nn.Linear(topic_dim, topic_dim)
+            self.w_sigma = nn.Parameter(torch.rand(500))
+            self.a_sigma = nn.Parameter(torch.rand(topic_dim))
+
+            # # mu: The mean of the variational distribution.
+            # self.mu_linear = nn.Linear(500 * topic_dim, topic_dim)
+
+            # # sigma: The root standard deviation of the variational distribution.
+            # self.sigma_linear = nn.Linear(500 * topic_dim, topic_dim)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -139,13 +148,13 @@ class TopicRNN(Model):
                 # Each latent representation will help tune the variational dist.'s parameters.
                 stopless_dim,
                 3,
-                [500, 500, topic_dim],
-                torch.nn.ReLU(),
+                [500, 500, 500 * topic_dim],
+                torch.nn.Tanh()
             )
 
             # The shape for the feature vector for sentiment classification.
             # (RNN Hidden Size + Inference Network output dimension).
-            sentiment_input_size = text_encoder.get_output_dim() + topic_dim
+            sentiment_input_size = text_encoder.get_output_dim() + 500 * topic_dim
             self.sentiment_classifier = sentiment_classifier or FeedForward(
                 # As done by the paper; a simple single layer with 50 hidden units
                 # and sigmoid activation for sentiment classification.
@@ -163,7 +172,7 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 50
+        self.num_samples = 20
 
         initializer(self)
 
@@ -181,10 +190,12 @@ class TopicRNN(Model):
         self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
         self.stopword_projection_layer = pretrained_model.stopword_projection_layer
         self.tokens_to_index = pretrained_model.tokens_to_index
+        self.w_mu = pretrained_model.w_mu
+        self.a_mu = pretrained_model.a_mu
+        self.w_sigma = pretrained_model.w_sigma
+        self.a_sigma = pretrained_model.a_sigma
         self.stop_indices = pretrained_model.stop_indices
         self.beta = pretrained_model.beta
-        self.mu_linear = pretrained_model.mu_linear
-        self.sigma_linear = pretrained_model.sigma_linear
         self.noise = pretrained_model.noise
         self.variational_autoencoder = pretrained_model.variational_autoencoder
         self.sentiment_classifier = pretrained_model.sentiment_classifier
@@ -216,6 +227,7 @@ class TopicRNN(Model):
             A scalar loss to be optimised.
         """
         output_dict = {}
+        # import pdb; pdb.set_trace()
 
         # Encode the input text.
         # Shape: (batch x sequence length x hidden size)
@@ -231,7 +243,7 @@ class TopicRNN(Model):
         # Note that for every logit in the projection into the vocabulary, the stop indicator
         # will be the same within time steps. This is because we predict whether forthcoming
         # words are stops or not and zero out topic additions for those time steps.
-        stopword_logits = sigmoid(self.stopword_projection_layer(encoded_input))
+        stopword_logits = torch.sigmoid(self.stopword_projection_layer(encoded_input))
         stopword_predictions = torch.argmax(stopword_logits, dim=-1)
         stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
@@ -245,22 +257,28 @@ class TopicRNN(Model):
         relevant_output_mask = output_mask.contiguous()
 
         # Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+
+        # TODO: Don't use the whole document?
+        stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        
+        # Reshape to (E, K)
+        mapped_term_frequencies = mapped_term_frequencies.view(mapped_term_frequencies.size(0), 500, -1)
 
         # If the inference network ever learns to output just 0, something has gone wrong.
-        assert mapped_term_frequencies.sum().item() > 0
+        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
+        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
 
-        mu = self.mu_linear(mapped_term_frequencies)
-        log_sigma = self.sigma_linear(mapped_term_frequencies)
+        mu = torch.matmul(self.w_mu, mapped_term_frequencies) + self.a_mu
+        log_sigma = torch.matmul(self.w_sigma, mapped_term_frequencies) + self.a_sigma
 
         # I .Compute KL-Divergence.
         # A closed-form solution exists since we're assuming q is drawn
         # from a normal distribution.
-        kl_divergence = 2 * log_sigma - (mu ** 2) - torch.exp(2 * log_sigma)
+        kl_divergence = torch.ones_like(mu) + 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
 
         # Sum along the topic dimension and add const.
-        kl_divergence = (self.topic_dim + torch.sum(kl_divergence)) / 2
+        kl_divergence = torch.sum(kl_divergence) / 2
 
         aggregate_cross_entropy_loss = 0
         for _ in range(self.num_samples):
@@ -323,7 +341,8 @@ class TopicRNN(Model):
 
         # Construct feature vector.
         # Shape: (batch, RNN hidden size + number of topics)
-        sentiment_features = torch.cat([encoded_input, mapped_term_frequencies], dim=-1)
+        batch = mapped_term_frequencies.size(0)
+        sentiment_features = torch.cat([encoded_input, mapped_term_frequencies.view(batch, -1)], dim=-1)
 
         # Classify.
         logits = self.sentiment_classifier(sentiment_features)
@@ -343,7 +362,6 @@ class TopicRNN(Model):
             # A conversion between namespaces (full vocab to stopless) is necessary.
             words = [self.vocab.get_token_from_index(index) for index in row.tolist()]
             word_counts = dict(Counter(words))
-            num_words = sum(word_counts.values())
 
             # TODO: Make this faster.
             for word, count in word_counts.items():
@@ -351,7 +369,7 @@ class TopicRNN(Model):
                     index = self.vocab.get_token_index(word, "stopless")
 
                     # Exclude padding token from influencing inference.
-                    res[i][index] = (count * int(index > 0)) / num_words
+                    res[i][index] = count * int(index > 0)
 
         return res
 
