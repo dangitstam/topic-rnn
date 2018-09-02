@@ -15,7 +15,6 @@ from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
-from torch.nn.functional import sigmoid
 from torch.nn.modules.linear import Linear
 
 from library.dataset_readers.util import STOP_WORDS
@@ -125,10 +124,18 @@ class TopicRNN(Model):
             self.beta = nn.Parameter(torch.ones(topic_dim, self.vocab_size) / topic_dim)
 
             # mu: The mean of the variational distribution.
-            self.mu_linear = nn.Linear(topic_dim, topic_dim)
+            self.w_mu = nn.Parameter(torch.rand(500))
+            self.a_mu = nn.Parameter(torch.rand(topic_dim))
 
             # sigma: The root standard deviation of the variational distribution.
-            self.sigma_linear = nn.Linear(topic_dim, topic_dim)
+            self.w_sigma = nn.Parameter(torch.rand(500))
+            self.a_sigma = nn.Parameter(torch.rand(topic_dim))
+
+            # # mu: The mean of the variational distribution.
+            # self.mu_linear = nn.Linear(500 * topic_dim, topic_dim)
+
+            # # sigma: The root standard deviation of the variational distribution.
+            # self.sigma_linear = nn.Linear(500 * topic_dim, topic_dim)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -141,8 +148,8 @@ class TopicRNN(Model):
                 # Each latent representation will help tune the variational dist.'s parameters.
                 stopless_dim,
                 3,
-                [500, 500, topic_dim],
-                torch.nn.ReLU()
+                [500, 500, 500 * topic_dim],
+                torch.nn.Tanh()
             )
 
             # The shape for the feature vector for sentiment classification.
@@ -234,7 +241,7 @@ class TopicRNN(Model):
         # Note that for every logit in the projection into the vocabulary, the stop indicator
         # will be the same within time steps. This is because we predict whether forthcoming
         # words are stops or not and zero out topic additions for those time steps.
-        stopword_logits = sigmoid(self.stopword_projection_layer(encoded_input))
+        stopword_logits = torch.sigmoid(self.stopword_projection_layer(encoded_input))
         stopword_predictions = torch.argmax(stopword_logits, dim=-1)
         stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
@@ -252,14 +259,16 @@ class TopicRNN(Model):
         # TODO: Don't use the whole document?
         stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+        
+        # Reshape to (E, K)
+        mapped_term_frequencies = mapped_term_frequencies.view(mapped_term_frequencies.size(0), 500, -1)
 
         # If the inference network ever learns to output just 0, something has gone wrong.
-        assert mapped_term_frequencies.sum().item() > 0
         self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
-        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.size(0) * self.topic_dim))
+        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
 
-        mu = self.mu_linear(mapped_term_frequencies)
-        log_sigma = self.sigma_linear(mapped_term_frequencies)
+        mu = torch.matmul(self.w_mu, mapped_term_frequencies) + self.a_mu
+        log_sigma = torch.matmul(self.w_sigma, mapped_term_frequencies) + self.a_sigma
 
         # I .Compute KL-Divergence.
         # A closed-form solution exists since we're assuming q is drawn
@@ -330,7 +339,8 @@ class TopicRNN(Model):
 
         # Construct feature vector.
         # Shape: (batch, RNN hidden size + number of topics)
-        sentiment_features = torch.cat([encoded_input, mapped_term_frequencies], dim=-1)
+        batch = mapped_term_frequencies.size(0)
+        sentiment_features = torch.cat([encoded_input, mapped_term_frequencies.view(batch, -1)], dim=-1)
 
         # Classify.
         logits = self.sentiment_classifier(sentiment_features)
