@@ -166,7 +166,7 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 50
+        self.num_samples = 20
 
         initializer(self)
 
@@ -184,10 +184,12 @@ class TopicRNN(Model):
         self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
         self.stopword_projection_layer = pretrained_model.stopword_projection_layer
         self.tokens_to_index = pretrained_model.tokens_to_index
+        self.w_mu = pretrained_model.w_mu
+        self.a_mu = pretrained_model.a_mu
+        self.w_sigma = pretrained_model.w_sigma
+        self.a_sigma = pretrained_model.a_sigma
         self.stop_indices = pretrained_model.stop_indices
         self.beta = pretrained_model.beta
-        self.mu_linear = pretrained_model.mu_linear
-        self.sigma_linear = pretrained_model.sigma_linear
         self.noise = pretrained_model.noise
         self.variational_autoencoder = pretrained_model.variational_autoencoder
         self.sentiment_classifier = pretrained_model.sentiment_classifier
@@ -268,10 +270,10 @@ class TopicRNN(Model):
         # I .Compute KL-Divergence.
         # A closed-form solution exists since we're assuming q is drawn
         # from a normal distribution.
-        kl_divergence = 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
+        kl_divergence = torch.ones_like(mu) + 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
 
         # Sum along the topic dimension and add const.
-        kl_divergence = (self.topic_dim + torch.sum(kl_divergence)) / 2
+        kl_divergence = torch.sum(kl_divergence) / 2
 
         aggregate_cross_entropy_loss = 0
         for _ in range(self.num_samples):
