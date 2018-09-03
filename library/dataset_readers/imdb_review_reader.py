@@ -14,6 +14,8 @@ import ujson
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
+# TODO: Feed the previous hidden state to the next subsequence...
+
 
 @DatasetReader.register("imdb_review_language_modeling_reader")
 class IMDBReviewLanguageModelingReader(DatasetReader):
@@ -187,22 +189,9 @@ class IMDBReviewReader(DatasetReader):
                 example_text = example['text']
                 example_text_tokenized = self._tokenizer.tokenize(example_text)
                 example_sentiment = "positive" if example['sentiment'] >= 5 else "negative"
-                example_sentiment_field = LabelField(example_sentiment)
+                example_instance = {
+                    'input_tokens': TextField(example_text_tokenized, self._token_indexers),
+                    'sentiment': LabelField(example_sentiment)
+                }
 
-                # Each review will receive the entire encoded review.
-                frequency_field = TextField(example_text_tokenized, self._token_indexers)
-                tokenized_strings = []
-                for index in range(0, len(example_text_tokenized) - num_tokens, num_tokens - 1):
-                    tokenized_strings.append(example_text_tokenized[index:(index + num_tokens)])
-
-                    # By breaking early when training a classifier, we prevent training on duplicates.
-                    if self._classification_mode:
-                        break
-
-                for tokenized_string in tokenized_strings:
-                    input_field = TextField(tokenized_string[:-1], self._token_indexers)
-                    output_field = TextField(tokenized_string[1:], self._token_indexers)
-                    yield Instance({'input_tokens': input_field,
-                                    'output_tokens': output_field,
-                                    'frequency_tokens': frequency_field,
-                                    'sentiment': example_sentiment_field})
+                yield Instance(example_instance)

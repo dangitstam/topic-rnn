@@ -1,5 +1,5 @@
 from collections import Counter
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -12,13 +12,22 @@ from allennlp.modules import (FeedForward, Seq2SeqEncoder, TextFieldEmbedder,
 from allennlp.modules.seq2vec_encoders.pytorch_seq2vec_wrapper import \
     PytorchSeq2VecWrapper
 from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
+from allennlp.nn.util import (get_lengths_from_binary_sequence_mask,
+                              sort_batch_by_length)
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.nn.modules.linear import Linear
+from torch.nn.utils.rnn import PackedSequence, pack_padded_sequence
 
 from library.dataset_readers.util import STOP_WORDS
 from library.metrics.perplexity import Perplexity
+
+from library.models.util import rnn_forward, description_from_metrics
+
+# Custom types from AllenNLP.
+RnnState = Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]  # pylint: disable=invalid-name
+RnnStateStorage = Tuple[torch.Tensor, ...]  # pylint: disable=invalid-name
 
 
 @Model.register("topic_rnn")
@@ -60,6 +69,7 @@ class TopicRNN(Model):
                  variational_autoencoder: FeedForward = None,
                  sentiment_classifier: FeedForward = None,
                  topic_dim: int = 20,
+                 bptt_limit: int = 35,
                  freeze_feature_extraction: bool = False,
                  classification_mode: bool = False,
                  pretrained_file: str = None,
@@ -68,11 +78,13 @@ class TopicRNN(Model):
         super(TopicRNN, self).__init__(vocab, regularizer)
 
         self.metrics = {
+            'aggregate_loss': Average(),
             'cross_entropy': Average(),
             'negative_kl_divergence': Average(),
             'stopword_loss': Average(),
             'mapped_term_freq_sum': Average(),
             'mapped_term_freq_filled_ratio': Average(),
+            'topic_contribution': Average()
         }
 
         self.classification_mode = classification_mode
@@ -90,8 +102,9 @@ class TopicRNN(Model):
             # IMDB sentiment classifier.
             self.text_field_embedder = text_field_embedder
             self.vocab_size = self.vocab.get_vocab_size("tokens")
-            self.text_encoder = text_encoder
+            self.text_encoder = text_encoder._modules['_module']
             self.topic_dim = topic_dim
+            self.bptt_limit = bptt_limit
             self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
                                                                       self.vocab_size))
 
@@ -166,7 +179,9 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 20
+        self.num_samples = 10
+
+        self._optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
 
         initializer(self)
 
@@ -197,8 +212,6 @@ class TopicRNN(Model):
     @overrides
     def forward(self,  # type: ignore
                 input_tokens: Dict[str, torch.LongTensor],
-                output_tokens: Dict[str, torch.LongTensor],
-                frequency_tokens: Dict[str, torch.LongTensor],
                 sentiment: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
@@ -221,99 +234,127 @@ class TopicRNN(Model):
             A scalar loss to be optimised.
         """
         output_dict = {}
-        # import pdb; pdb.set_trace()
-
-        # Encode the input text.
-        # Shape: (batch x sequence length x hidden size)
-        embedded_input = self.text_field_embedder(input_tokens)
-        input_mask = util.get_text_field_mask(input_tokens)
-        encoded_input = self.text_encoder(embedded_input, input_mask)
-
-        # Initial projection into vocabulary space, v^T * h_t.
-        # Shape: (batch x sequence length x vocabulary size)
-        logits = self.vocabulary_projection_layer(encoded_input)
-
-        # Predict stopwords.
-        # Note that for every logit in the projection into the vocabulary, the stop indicator
-        # will be the same within time steps. This is because we predict whether forthcoming
-        # words are stops or not and zero out topic additions for those time steps.
-        stopword_logits = torch.sigmoid(self.stopword_projection_layer(encoded_input))
-        stopword_predictions = torch.argmax(stopword_logits, dim=-1)
-        stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
         # Word frequency vectors and noise aren't generated with the model. If the model
         # is running on a GPU, these tensors need to be moved to the correct device.
-        device = logits.device
+        device = input_tokens['tokens'].device
 
-        # Mask the output for proper loss calculation.
-        output_mask = util.get_text_field_mask(output_tokens)
-        relevant_output = output_tokens['tokens'].contiguous()
-        relevant_output_mask = output_mask.contiguous()
+        # Train the RNNs and backprop BPTT steps at a time.
+        # Preserve the hidden state between BPTT chunks.
+        hidden_state = None
+        max_sequence_length = input_tokens['tokens'].size(1)
+        print()
+        print("Max seqeunce length:", max_sequence_length)
+        for i in range(max_sequence_length - self.bptt_limit):
 
-        # Compute Gaussian parameters.
+            # Compute Gaussian parameters.
+            stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
+            mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-        # TODO: Don't use the whole document?
-        stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
-        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+            # Reshape to (E, K)
+            mapped_term_frequencies = mapped_term_frequencies.view(mapped_term_frequencies.size(0), 500, -1)
 
-        # Reshape to (E, K)
-        mapped_term_frequencies = mapped_term_frequencies.view(mapped_term_frequencies.size(0), 500, -1)
+            # If the inference network ever learns to output just 0, something has gone wrong.
+            self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
+            self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
 
-        # If the inference network ever learns to output just 0, something has gone wrong.
-        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
-        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
+            mu = torch.matmul(self.w_mu, mapped_term_frequencies) + self.a_mu
+            log_sigma = torch.matmul(self.w_sigma, mapped_term_frequencies) + self.a_sigma
 
-        import pdb; pdb.set_trace()
-        mu = torch.matmul(self.w_mu, mapped_term_frequencies) + self.a_mu
-        log_sigma = torch.matmul(self.w_sigma, mapped_term_frequencies) + self.a_sigma
+            # I .Compute KL-Divergence.
+            # A closed-form solution exists since we're assuming q is drawn
+            # from a normal distribution.
+            kl_divergence = torch.ones_like(mu) + 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
 
-        # I .Compute KL-Divergence.
-        # A closed-form solution exists since we're assuming q is drawn
-        # from a normal distribution.
-        kl_divergence = torch.ones_like(mu) + 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
+            # Sum along the topic dimension and add const.
+            kl_divergence = torch.sum(kl_divergence) / 2
 
-        # Sum along the topic dimension and add const.
-        kl_divergence = torch.sum(kl_divergence) / 2
+            aggregate_cross_entropy_loss = 0
+            aggregate_stopword_loss = 0
 
-        aggregate_cross_entropy_loss = 0
-        for _ in range(self.num_samples):
+            # Index at the second dimension (sequence).
+            # TextFieldEmbedders need dictionary input where the key is the namespace.
+            current_tokens = {'tokens': input_tokens['tokens'][:, i: i + self.bptt_limit]}
+            target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + self.bptt_limit]}
 
-            # Compute noise for sampling.
-            epsilon = self.noise.rsample().to(device=device)
+            # Encode the current input text, incorporating previous hidden state if available.
+            # Shape: (batch x BPTT limit x hidden size)
+            embedded_input = self.text_field_embedder(current_tokens)
+            input_mask = util.get_text_field_mask(current_tokens)
+            encoded_input, hidden_state = rnn_forward(self.text_encoder, embedded_input, input_mask, hidden_state)
 
-            # Compute noisy topic proportions given Gaussian parameters.
-            theta = mu + torch.exp(log_sigma) * epsilon
+            # Initial projection into vocabulary space, v^T * h_t.
+            # Shape: (batch x BPTT limit x vocabulary size)
+            logits = self.vocabulary_projection_layer(encoded_input)
 
+            # Predict stopwords.
+            # Note that for every logit in the projection into the vocabulary, the stop indicator
+            # will be the same within time steps. This is because we predict whether forthcoming
+            # words are stops or not and zero out topic additions for those time steps.
+            stopword_logits = torch.sigmoid(self.stopword_projection_layer(encoded_input))
+            stopword_predictions = torch.argmax(stopword_logits, dim=-1)
+            stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
-            # II. Compute cross entropy against next words for the current sample of noise.
-            # Padding and OOV tokens are indexed at 0 and 1.
-            topic_additions = torch.mm(theta, self.beta)
-            topic_additions.t()[0] = 0  # Padding will be treated as stops.
-            topic_additions.t()[1] = 0  # Unknowns will be treated as stops.
+            # Mask the output for proper loss calculation.
+            output_mask = util.get_text_field_mask(target_tokens)
+            relevant_output = target_tokens['tokens'].contiguous()
+            relevant_output_mask = output_mask.contiguous()
 
-            # Stop words have no contribution via topics.
-            topic_additions = (1 - stopword_predictions).float() * topic_additions.unsqueeze(1).expand_as(logits)
-            cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + topic_additions,
-                                                                         relevant_output,
-                                                                         relevant_output_mask)
-            aggregate_cross_entropy_loss += cross_entropy_loss
+            # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
+            relevant_stopword_output = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
+            stopword_loss = util.sequence_cross_entropy_with_logits(stopword_logits,
+                                                                    relevant_stopword_output,
+                                                                    relevant_output_mask)
 
-        averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
+            for _ in range(self.num_samples):
 
-        # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
-        relevant_stopword_output = self._compute_stopword_mask(output_tokens).contiguous().to(device=device)
-        stopword_loss = util.sequence_cross_entropy_with_logits(stopword_logits,
-                                                                relevant_stopword_output,
-                                                                relevant_output_mask)
+                # Compute noise for sampling.
+                epsilon = self.noise.rsample().to(device=device)
 
-        if self.classification_mode:
-            output_dict['loss'] = self._classify_sentiment(frequency_tokens, mapped_term_frequencies, sentiment)
-        else:
-            output_dict['loss'] = -kl_divergence + averaged_cross_entropy_loss + stopword_loss
+                # Compute noisy topic proportions given Gaussian parameters.
+                theta = mu + torch.exp(log_sigma) * epsilon
 
-        self.metrics['negative_kl_divergence']((-kl_divergence).item())
-        self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
-        self.metrics['stopword_loss'](stopword_loss.item())
+                # II. Compute cross entropy against next words for the current sample of noise.
+                # Padding and OOV tokens are indexed at 0 and 1.
+                topic_additions = torch.mm(theta, self.beta)
+                topic_additions.t()[0] = 0  # Padding will be treated as stops.
+                topic_additions.t()[1] = 0  # Unknowns will be treated as stops.
+
+                # Stop words have no contribution via topics.
+                gated_topic_additions = (1 - stopword_predictions).float() * topic_additions.unsqueeze(1).expand_as(logits)
+                self.metrics['topic_contribution'](gated_topic_additions.sum().item())
+
+                cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + gated_topic_additions,
+                                                                            relevant_output,
+                                                                            relevant_output_mask)
+                aggregate_cross_entropy_loss += cross_entropy_loss
+
+            # TODO: Backprop after every BPTT chunk!
+            # Save the last one as a formality for AllenNLP and return it via output_dict.
+            # Add an 'aggregate_loss' metric to make sure the right model is saved from validation results.
+            # Break up training code into a 'forward' and 'forward_training'?
+            averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
+
+            loss = -kl_divergence + averaged_cross_entropy_loss + stopword_loss
+
+            self._optimizer.zero_grad()
+            loss.backward()
+            self._optimizer.step()
+
+            hidden_state = hidden_state.detach()
+
+            if i == max_sequence_length - self.bptt_limit - 1:
+                if self.classification_mode:
+                    output_dict['loss'] = self._classify_sentiment(input_tokens, mapped_term_frequencies, sentiment)
+                else:
+                    output_dict['loss'] = loss
+
+            self.metrics['aggregate_loss'](loss.item())
+            self.metrics['negative_kl_divergence']((-kl_divergence).item())
+            self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
+            self.metrics['stopword_loss'](stopword_loss.item())
+
+            print(description_from_metrics(self.get_metrics()))
 
         return output_dict
 
@@ -387,3 +428,4 @@ class TopicRNN(Model):
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # TODO: What makes sense for a decode for TopicRNN?
         return output_dict
+    
