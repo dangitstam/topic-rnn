@@ -343,9 +343,10 @@ class TopicRNN(Model):
                 else:
                     output_dict['loss'] = loss
             else:
-                self._optimizer.zero_grad()
-                loss.backward()
-                self._optimizer.step()
+                if self.training:
+                    self._optimizer.zero_grad()
+                    loss.backward()
+                    self._optimizer.step()
 
                 hidden_state = hidden_state.detach()
 
