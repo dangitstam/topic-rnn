@@ -133,12 +133,10 @@ class TopicRNN(Model):
             self.beta = nn.Parameter(torch.ones(topic_dim, self.vocab_size) / topic_dim)
 
             # mu: The mean of the variational distribution.
-            self.w_mu = nn.Parameter(torch.rand(500))
-            self.a_mu = nn.Parameter(torch.rand(topic_dim))
+            self.mu_linear = nn.Linear(500, self.topic_dim)
 
             # sigma: The root standard deviation of the variational distribution.
-            self.w_sigma = nn.Parameter(torch.rand(500))
-            self.a_sigma = nn.Parameter(torch.rand(topic_dim))
+            self.sigma_linear = nn.Linear(500, self.topic_dim)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -150,14 +148,14 @@ class TopicRNN(Model):
                 #
                 # Each latent representation will help tune the variational dist.'s parameters.
                 stopless_dim,
-                3,
-                [500, 500, 500 * topic_dim],
-                torch.nn.Tanh()
+                2,
+                [500, 500],
+                torch.nn.ReLU()
             )
 
             # The shape for the feature vector for sentiment classification.
             # (RNN Hidden Size + Inference Network output dimension).
-            sentiment_input_size = text_encoder.get_output_dim() + 500 * topic_dim
+            sentiment_input_size = text_encoder.get_output_dim() + topic_dim
             self.sentiment_classifier = sentiment_classifier or FeedForward(
                 # As done by the paper; a simple single layer with 50 hidden units
                 # and sigmoid activation for sentiment classification.
@@ -195,10 +193,8 @@ class TopicRNN(Model):
         self.vocabulary_projection_layer = pretrained_model.vocabulary_projection_layer
         self.stopword_projection_layer = pretrained_model.stopword_projection_layer
         self.tokens_to_index = pretrained_model.tokens_to_index
-        self.w_mu = pretrained_model.w_mu
-        self.a_mu = pretrained_model.a_mu
-        self.w_sigma = pretrained_model.w_sigma
-        self.a_sigma = pretrained_model.a_sigma
+        self.mu_linear = pretrained_model.mu_linear
+        self.sigma_linear = pretrained_model.sigma_linear
         self.stop_indices = pretrained_model.stop_indices
         self.beta = pretrained_model.beta
         self.noise = pretrained_model.noise
@@ -256,15 +252,12 @@ class TopicRNN(Model):
             stopless_word_frequencies = self._compute_word_frequency_vector(current_tokens).to(device=device)
             mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-            # Reshape to (E, K)
-            mapped_term_frequencies = mapped_term_frequencies.view(mapped_term_frequencies.size(0), 500, -1)
-
             # If the inference network ever learns to output just 0, something has gone wrong.
             self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
             self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
 
-            mu = torch.matmul(self.w_mu, mapped_term_frequencies) + self.a_mu
-            log_sigma = torch.matmul(self.w_sigma, mapped_term_frequencies) + self.a_sigma
+            mu = self.mu_linear(mapped_term_frequencies)
+            log_sigma = self.sigma_linear(mapped_term_frequencies)
 
             # I .Compute KL-Divergence.
             # A closed-form solution exists since we're assuming q is drawn
@@ -336,7 +329,7 @@ class TopicRNN(Model):
 
             if i == max_sequence_length - self.bptt_limit - 1:
                 if self.classification_mode:
-                    output_dict['loss'] = self._classify_sentiment(input_tokens, mapped_term_frequencies, sentiment)
+                    output_dict['loss'] = self._classify_sentiment(input_tokens, mu, sentiment)
                 else:
                     output_dict['loss'] = loss
             else:
@@ -358,7 +351,7 @@ class TopicRNN(Model):
 
     def _classify_sentiment(self,  # type: ignore
                             frequency_tokens: Dict[str, torch.LongTensor],
-                            mapped_term_frequencies: torch.Tensor,
+                            mu: torch.Tensor,
                             sentiment: Dict[str, torch.LongTensor]) -> torch.Tensor:
         # pylint: disable=arguments-differ
         """
@@ -375,8 +368,7 @@ class TopicRNN(Model):
 
         # Construct feature vector.
         # Shape: (batch, RNN hidden size + number of topics)
-        batch = mapped_term_frequencies.size(0)
-        sentiment_features = torch.cat([encoded_input, mapped_term_frequencies.view(batch, -1)], dim=-1)
+        sentiment_features = torch.cat([encoded_input, mu], dim=-1)
 
         # Classify.
         logits = self.sentiment_classifier(sentiment_features)
