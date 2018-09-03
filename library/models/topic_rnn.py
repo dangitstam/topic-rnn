@@ -131,12 +131,6 @@ class TopicRNN(Model):
             self.w_sigma = nn.Parameter(torch.rand(500))
             self.a_sigma = nn.Parameter(torch.rand(topic_dim))
 
-            # # mu: The mean of the variational distribution.
-            # self.mu_linear = nn.Linear(500 * topic_dim, topic_dim)
-
-            # # sigma: The root standard deviation of the variational distribution.
-            # self.sigma_linear = nn.Linear(500 * topic_dim, topic_dim)
-
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
 
@@ -154,7 +148,7 @@ class TopicRNN(Model):
 
             # The shape for the feature vector for sentiment classification.
             # (RNN Hidden Size + Inference Network output dimension).
-            sentiment_input_size = text_encoder.get_output_dim() + topic_dim
+            sentiment_input_size = text_encoder.get_output_dim() + 500 * topic_dim
             self.sentiment_classifier = sentiment_classifier or FeedForward(
                 # As done by the paper; a simple single layer with 50 hidden units
                 # and sigmoid activation for sentiment classification.
@@ -259,7 +253,7 @@ class TopicRNN(Model):
         # TODO: Don't use the whole document?
         stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
-        
+
         # Reshape to (E, K)
         mapped_term_frequencies = mapped_term_frequencies.view(mapped_term_frequencies.size(0), 500, -1)
 
@@ -267,6 +261,7 @@ class TopicRNN(Model):
         self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
         self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
 
+        import pdb; pdb.set_trace()
         mu = torch.matmul(self.w_mu, mapped_term_frequencies) + self.a_mu
         log_sigma = torch.matmul(self.w_sigma, mapped_term_frequencies) + self.a_sigma
 
@@ -303,7 +298,7 @@ class TopicRNN(Model):
 
         averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
 
-        # III. Compute stopword probabilities and gear RNN hidden states toward learning them. 
+        # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
         relevant_stopword_output = self._compute_stopword_mask(output_tokens).contiguous().to(device=device)
         stopword_loss = util.sequence_cross_entropy_with_logits(stopword_logits,
                                                                 relevant_stopword_output,
