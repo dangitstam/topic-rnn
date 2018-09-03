@@ -243,8 +243,17 @@ class TopicRNN(Model):
         print("Max seqeunce length:", max_sequence_length)
         for i in range(max_sequence_length - self.bptt_limit):
 
+
+            aggregate_cross_entropy_loss = 0
+            aggregate_stopword_loss = 0
+
+            # Index at the second dimension (sequence).
+            # TextFieldEmbedders need dictionary input where the key is the namespace.
+            current_tokens = {'tokens': input_tokens['tokens'][:, i: i + self.bptt_limit]}
+            target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + self.bptt_limit]}
+
             # Compute Gaussian parameters.
-            stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
+            stopless_word_frequencies = self._compute_word_frequency_vector(current_tokens).to(device=device)
             mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
             # Reshape to (E, K)
@@ -264,14 +273,6 @@ class TopicRNN(Model):
 
             # Sum along the topic dimension and add const.
             kl_divergence = torch.sum(kl_divergence) / 2
-
-            aggregate_cross_entropy_loss = 0
-            aggregate_stopword_loss = 0
-
-            # Index at the second dimension (sequence).
-            # TextFieldEmbedders need dictionary input where the key is the namespace.
-            current_tokens = {'tokens': input_tokens['tokens'][:, i: i + self.bptt_limit]}
-            target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + self.bptt_limit]}
 
             # Encode the current input text, incorporating previous hidden state if available.
             # Shape: (batch x BPTT limit x hidden size)
@@ -344,7 +345,7 @@ class TopicRNN(Model):
                     loss.backward()
                     self._optimizer.step()
 
-                    print(description_from_metrics(self.get_metrics()), flush=True)
+                    print(description_from_metrics(self.get_metrics()), end="\r", flush=True)
 
                 hidden_state = hidden_state.detach()
 
