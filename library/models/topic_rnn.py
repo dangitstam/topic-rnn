@@ -1,3 +1,4 @@
+import sys
 from collections import Counter
 from typing import Callable, Dict, Optional, Tuple, Union
 
@@ -22,12 +23,7 @@ from torch.nn.utils.rnn import PackedSequence, pack_padded_sequence
 
 from library.dataset_readers.util import STOP_WORDS
 from library.metrics.perplexity import Perplexity
-
-from library.models.util import rnn_forward, description_from_metrics
-
-# Custom types from AllenNLP.
-RnnState = Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]  # pylint: disable=invalid-name
-RnnStateStorage = Tuple[torch.Tensor, ...]  # pylint: disable=invalid-name
+from library.models.util import description_from_metrics, rnn_forward
 
 
 @Model.register("topic_rnn")
@@ -291,7 +287,7 @@ class TopicRNN(Model):
             # Note that for every logit in the projection into the vocabulary, the stop indicator
             # will be the same within time steps. This is because we predict whether forthcoming
             # words are stops or not and zero out topic additions for those time steps.
-            stopword_logits = torch.sigmoid(self.stopword_projection_layer(encoded_input))
+            stopword_logits = self.stopword_projection_layer(encoded_input)
             stopword_predictions = torch.argmax(stopword_logits, dim=-1)
             stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
@@ -348,14 +344,14 @@ class TopicRNN(Model):
                     loss.backward()
                     self._optimizer.step()
 
+                    print(description_from_metrics(self.get_metrics()), flush=True)
+
                 hidden_state = hidden_state.detach()
 
             self.metrics['aggregate_loss'](loss.item())
             self.metrics['negative_kl_divergence']((-kl_divergence).item())
             self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
             self.metrics['stopword_loss'](stopword_loss.item())
-
-            print(description_from_metrics(self.get_metrics()))
 
         return output_dict
 
@@ -429,4 +425,3 @@ class TopicRNN(Model):
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # TODO: What makes sense for a decode for TopicRNN?
         return output_dict
-    

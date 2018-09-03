@@ -47,6 +47,7 @@
     "grad_clipping": 5.0,
     "optimizer": {
       "type": "adam"
-    }
+    },
+    "validation_metric": "-aggregate_loss"
   }
 }
