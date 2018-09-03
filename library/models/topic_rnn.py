@@ -337,17 +337,17 @@ class TopicRNN(Model):
 
             loss = -kl_divergence + averaged_cross_entropy_loss + stopword_loss
 
-            self._optimizer.zero_grad()
-            loss.backward()
-            self._optimizer.step()
-
-            hidden_state = hidden_state.detach()
-
             if i == max_sequence_length - self.bptt_limit - 1:
                 if self.classification_mode:
                     output_dict['loss'] = self._classify_sentiment(input_tokens, mapped_term_frequencies, sentiment)
                 else:
                     output_dict['loss'] = loss
+            else:
+                self._optimizer.zero_grad()
+                loss.backward()
+                self._optimizer.step()
+
+                hidden_state = hidden_state.detach()
 
             self.metrics['aggregate_loss'](loss.item())
             self.metrics['negative_kl_divergence']((-kl_divergence).item())
