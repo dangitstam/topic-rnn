@@ -130,13 +130,16 @@ class TopicRNN(Model):
 
             # Learnable topics.
             # TODO: How should these be initialized?
-            self.beta = nn.Parameter(torch.ones(topic_dim, self.vocab_size) / topic_dim)
+            self.beta = nn.Parameter(torch.empty(topic_dim, self.vocab_size))
+            nn.init.uniform(self.beta)
 
             # mu: The mean of the variational distribution.
             self.mu_linear = nn.Linear(500, self.topic_dim)
+            nn.init.uniform(self.mu_linear.weight)
 
             # sigma: The root standard deviation of the variational distribution.
             self.sigma_linear = nn.Linear(500, self.topic_dim)
+            nn.init.uniform(self.sigma_linear.weight)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -238,10 +241,7 @@ class TopicRNN(Model):
         print()
         print("Max seqeunce length:", max_sequence_length)
         for i in range(max_sequence_length - self.bptt_limit):
-
-
             aggregate_cross_entropy_loss = 0
-            aggregate_stopword_loss = 0
 
             # Index at the second dimension (sequence).
             # TextFieldEmbedders need dictionary input where the key is the namespace.
@@ -315,8 +315,8 @@ class TopicRNN(Model):
                 self.metrics['topic_contribution'](gated_topic_additions.sum().item())
 
                 cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + gated_topic_additions,
-                                                                            relevant_output,
-                                                                            relevant_output_mask)
+                                                                             relevant_output,
+                                                                             relevant_output_mask)
                 aggregate_cross_entropy_loss += cross_entropy_loss
 
             # TODO: Backprop after every BPTT chunk!
