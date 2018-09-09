@@ -66,6 +66,7 @@ class IMDBReviewLanguageModelingReader(DatasetReader):
             "tokens": SingleIdTokenIndexer(namespace="tokens", lowercase_tokens=True)
         }
 
+        self.instances = 0
         self._words_per_instance = words_per_instance
 
     @overrides
@@ -113,6 +114,7 @@ class IMDBReviewLanguageModelingReader(DatasetReader):
                     # When computing perplexity, the topic vector will be drawn from the distrubtion
                     # resulting from this context.
                     previous_batch = input_field
+                    self.instances += 1
 
                     yield Instance(example)
 
@@ -130,9 +132,8 @@ class IMDBReviewReader(DatasetReader):
     is the goal.
 
     Each ``read`` yields a data instance of
-        text: A backpropagation-through-time length portion of the review text as a ``TextField``
-        stopless_word_frequencies: A ``torch.FloatTensor`` representing the normalized frequencies
-            of words in the stopless vocabulary space.
+        input_tokens: A backpropagation-through-time length portion of the review text as a ``TextField``
+        sentiment: Either `positive` or `negative`
 
     Parameters
     ----------
@@ -154,8 +155,6 @@ class IMDBReviewReader(DatasetReader):
                  lazy: bool = False,
                  tokenizer: Tokenizer = None,
                  token_indexers: Dict[str, TokenIndexer] = None,
-                 words_per_instance: int = 35,
-                 classification_mode=False
                 ) -> None:
         super().__init__(lazy)
         self._tokenizer = tokenizer or WordTokenizer(
@@ -166,19 +165,13 @@ class IMDBReviewReader(DatasetReader):
             "tokens": SingleIdTokenIndexer(namespace="tokens", lowercase_tokens=True)
         }
 
-        self._words_per_instance = words_per_instance
-        self._classification_mode = classification_mode
+        self.instances = 0
 
     @overrides
     def _read(self, file_path):
         # A training instance consists of the word frequencies for the entire review and a
         # `words_per_instance`` portion of the review.
         file_path = cached_path(file_path)
-
-        # Partition each review into BPTT Limit + 1 chunks to allow room for input (chunk[:-1])
-        # and output (chunk[1:]).
-        # Break up the text into a series of BPTT chunks and yield one at a time.
-        num_tokens = self._words_per_instance + 1
         with open(cached_path(file_path), 'r') as data_file:
             logger.info("Reading instances from lines in file: %s", file_path)
             for line in data_file:
@@ -193,5 +186,7 @@ class IMDBReviewReader(DatasetReader):
                     'input_tokens': TextField(example_text_tokenized, self._token_indexers),
                     'sentiment': LabelField(example_sentiment)
                 }
+
+                self.instances += 1
 
                 yield Instance(example_instance)

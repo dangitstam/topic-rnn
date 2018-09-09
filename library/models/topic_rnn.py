@@ -74,7 +74,6 @@ class TopicRNN(Model):
         super(TopicRNN, self).__init__(vocab, regularizer)
 
         self.metrics = {
-            'aggregate_loss': Average(),
             'cross_entropy': Average(),
             'negative_kl_divergence': Average(),
             'stopword_loss': Average(),
@@ -131,15 +130,15 @@ class TopicRNN(Model):
             # Learnable topics.
             # TODO: How should these be initialized?
             self.beta = nn.Parameter(torch.empty(topic_dim, self.vocab_size))
-            nn.init.uniform(self.beta)
+            nn.init.uniform_(self.beta)
 
             # mu: The mean of the variational distribution.
             self.mu_linear = nn.Linear(500, self.topic_dim)
-            nn.init.uniform(self.mu_linear.weight)
+            nn.init.uniform_(self.mu_linear.weight)
 
             # sigma: The root standard deviation of the variational distribution.
             self.sigma_linear = nn.Linear(500, self.topic_dim)
-            nn.init.uniform(self.sigma_linear.weight)
+            nn.init.uniform_(self.sigma_linear.weight)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -178,8 +177,6 @@ class TopicRNN(Model):
 
         self.num_samples = 10
 
-        self._optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
-
         initializer(self)
 
     def _init_from_archive(self, pretrained_model: Model):
@@ -207,7 +204,9 @@ class TopicRNN(Model):
     @overrides
     def forward(self,  # type: ignore
                 input_tokens: Dict[str, torch.LongTensor],
-                sentiment: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:
+                target_tokens: Dict[str, torch.LongTensor] = None,
+                sentiment: Dict[str, torch.LongTensor] = None,
+                hidden_state: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -228,6 +227,10 @@ class TopicRNN(Model):
         loss : torch.FloatTensor, optional
             A scalar loss to be optimised.
         """
+
+        # The model is either an LM or a classifier, not both.
+        assert not (target_tokens and sentiment), "Multiple target outputs is ambiguous."
+
         output_dict = {}
 
         # Word frequency vectors and noise aren't generated with the model. If the model
@@ -236,17 +239,13 @@ class TopicRNN(Model):
 
         # Train the RNNs and backprop BPTT steps at a time.
         # Preserve the hidden state between BPTT chunks.
-        hidden_state = None
-        max_sequence_length = input_tokens['tokens'].size(1)
-        print()
-        print("Max seqeunce length:", max_sequence_length)
-        for i in range(max_sequence_length - self.bptt_limit):
+        if target_tokens:
             aggregate_cross_entropy_loss = 0
 
             # Index at the second dimension (sequence).
             # TextFieldEmbedders need dictionary input where the key is the namespace.
-            current_tokens = {'tokens': input_tokens['tokens'][:, i: i + self.bptt_limit]}
-            target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + self.bptt_limit]}
+            current_tokens = {'tokens': input_tokens['tokens']}
+            target_tokens = {'tokens': input_tokens['tokens']}
 
             # Compute Gaussian parameters.
             stopless_word_frequencies = self._compute_word_frequency_vector(current_tokens).to(device=device)
@@ -315,39 +314,23 @@ class TopicRNN(Model):
                 self.metrics['topic_contribution'](gated_topic_additions.sum().item())
 
                 cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + gated_topic_additions,
-                                                                             relevant_output,
-                                                                             relevant_output_mask)
+                                                                                relevant_output,
+                                                                                relevant_output_mask)
                 aggregate_cross_entropy_loss += cross_entropy_loss
 
-            # TODO: Backprop after every BPTT chunk!
-            # Save the last one as a formality for AllenNLP and return it via output_dict.
-            # Add an 'aggregate_loss' metric to make sure the right model is saved from validation results.
-            # Break up training code into a 'forward' and 'forward_training'?
             averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples
 
-            loss = -kl_divergence + averaged_cross_entropy_loss + stopword_loss
+            # TopicRNN objective function.
+            output_dict['loss'] = -kl_divergence + averaged_cross_entropy_loss + stopword_loss
 
-            if i == max_sequence_length - self.bptt_limit - 1:
-                if self.classification_mode:
-                    output_dict['loss'] = self._classify_sentiment(input_tokens, mu, sentiment)
-                else:
-                    output_dict['loss'] = loss
-            else:
-                if self.training:
-                    self._optimizer.zero_grad()
-                    loss.backward()
-                    self._optimizer.step()
-
-                    print(description_from_metrics(self.get_metrics()), end="\r", flush=True)
-
-                hidden_state = hidden_state.detach()
-
-            self.metrics['aggregate_loss'](loss.item())
             self.metrics['negative_kl_divergence']((-kl_divergence).item())
             self.metrics['cross_entropy'](averaged_cross_entropy_loss.item())
             self.metrics['stopword_loss'](stopword_loss.item())
 
-        return output_dict
+        else:
+            output_dict['loss'] = self._classify_sentiment(input_tokens, mu, sentiment)
+
+        return output_dict, hidden_state
 
     def _classify_sentiment(self,  # type: ignore
                             frequency_tokens: Dict[str, torch.LongTensor],
