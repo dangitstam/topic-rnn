@@ -152,7 +152,7 @@ class TopicRNN(Model):
                 stopless_dim,
                 2,
                 [500, 500],
-                torch.nn.ReLU()
+                torch.nn.Tanh()
             )
 
             # The shape for the feature vector for sentiment classification.

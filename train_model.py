@@ -84,7 +84,7 @@ def main():
                               "validation-period weight updates."))
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed to use")
-    parser.add_argument("--cuda-device", default=-1,
+    parser.add_argument("--cuda-device", type=int, default=-1,
                         help="Train or evaluate with GPU.")
     parser.add_argument("--demo", action="store_true",
                         help="Run the interactive web demo.")
