@@ -148,7 +148,7 @@ class TopicRNN(Model):
                 stopless_dim,
                 2,
                 [500, 500],
-                torch.nn.Tanh()
+                torch.nn.ReLU()
             )
 
             # The shape for the feature vector for sentiment classification.
@@ -239,13 +239,8 @@ class TopicRNN(Model):
         if target_tokens:
             aggregate_cross_entropy_loss = 0
 
-            # Index at the second dimension (sequence).
-            # TextFieldEmbedders need dictionary input where the key is the namespace.
-            current_tokens = {'tokens': input_tokens['tokens']}
-            target_tokens = {'tokens': input_tokens['tokens']}
-
             # Compute Gaussian parameters.
-            stopless_word_frequencies = self._compute_word_frequency_vector(current_tokens).to(device=device)
+            stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
             mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
             # If the inference network ever learns to output just 0, something has gone wrong.
@@ -265,8 +260,8 @@ class TopicRNN(Model):
 
             # Encode the current input text, incorporating previous hidden state if available.
             # Shape: (batch x BPTT limit x hidden size)
-            embedded_input = self.text_field_embedder(current_tokens)
-            input_mask = util.get_text_field_mask(current_tokens)
+            embedded_input = self.text_field_embedder(input_tokens)
+            input_mask = util.get_text_field_mask(input_tokens)
             encoded_input, hidden_state = rnn_forward(self.text_encoder, embedded_input, input_mask, hidden_state)
 
             # Initial projection into vocabulary space, v^T * h_t.
