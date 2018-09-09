@@ -97,11 +97,13 @@ class TopicRNN(Model):
             self.topic_dim = topic_dim
             self.bptt_limit = bptt_limit
             self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
-                                                                      self.vocab_size))
+                                                                      self.vocab_size,
+                                                                      bias=False))
 
             # Parameter gamma from the paper; projects hidden states into binary logits for whether a
             # word is a stopword.
-            self.stopword_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(), 2))
+            self.stopword_projection_layer = nn.Parameter(torch.empty(text_encoder.get_output_dim()))
+            nn.init.uniform_(self.stopword_projection_layer)
 
             self.tokens_to_index = vocab.get_token_to_index_vocabulary()
 
@@ -200,6 +202,7 @@ class TopicRNN(Model):
     @overrides
     def forward(self,  # type: ignore
                 input_tokens: Dict[str, torch.LongTensor],
+                frequency_tokens: Dict[str, torch.LongTensor],
                 target_tokens: Dict[str, torch.LongTensor] = None,
                 sentiment: Dict[str, torch.LongTensor] = None,
                 hidden_state: torch.LongTensor = None,
@@ -240,7 +243,7 @@ class TopicRNN(Model):
             aggregate_cross_entropy_loss = 0
 
             # Compute Gaussian parameters.
-            stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
+            stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
             mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
             # If the inference network ever learns to output just 0, something has gone wrong.
@@ -272,8 +275,10 @@ class TopicRNN(Model):
             # Note that for every logit in the projection into the vocabulary, the stop indicator
             # will be the same within time steps. This is because we predict whether forthcoming
             # words are stops or not and zero out topic additions for those time steps.
-            stopword_logits = self.stopword_projection_layer(encoded_input)
-            stopword_predictions = torch.argmax(stopword_logits, dim=-1)
+
+            # Shape: (batch, sequence length)
+            stopword_raw_probabilities = torch.matmul(encoded_input, self.stopword_projection_layer)
+            stopword_predictions = torch.sigmoid(stopword_raw_probabilities) >= 0.5
             stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
             # Mask the output for proper loss calculation.
@@ -283,9 +288,8 @@ class TopicRNN(Model):
 
             # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
             relevant_stopword_output = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
-            stopword_loss = util.sequence_cross_entropy_with_logits(stopword_logits,
-                                                                    relevant_stopword_output,
-                                                                    relevant_output_mask)
+            masked_stopword_criterion = nn.BCEWithLogitsLoss(relevant_output_mask.float())
+            stopword_loss = masked_stopword_criterion(stopword_raw_probabilities, relevant_stopword_output.float())
 
             for _ in range(self.num_samples):
 
@@ -306,8 +310,8 @@ class TopicRNN(Model):
                 self.metrics['topic_contribution'](gated_topic_additions.sum().item())
 
                 cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + gated_topic_additions,
-                                                                                relevant_output,
-                                                                                relevant_output_mask)
+                                                                             relevant_output,
+                                                                             relevant_output_mask)
                 aggregate_cross_entropy_loss += cross_entropy_loss
 
             averaged_cross_entropy_loss = aggregate_cross_entropy_loss / self.num_samples

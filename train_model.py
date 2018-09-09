@@ -68,7 +68,7 @@ def main():
                         help="Maximum number of words in the question.")
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Batch size to use in training and evaluation.")
-    parser.add_argument("--hidden-size", type=int, default=256,
+    parser.add_argument("--hidden-size", type=int, default=300,
                         help="Hidden size to use in the RNN.")
     parser.add_argument("--num-epochs", type=int, default=25,
                         help="Number of epochs to train for.")
@@ -153,6 +153,7 @@ def train_epoch(model: TopicRNN,
             target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
 
             output_dict, hidden_state = model.forward(current_tokens,
+                                                      input_tokens,
                                                       target_tokens=target_tokens,
                                                       hidden_state=hidden_state)
 
@@ -206,7 +207,7 @@ def evaluate(model: TopicRNN,
         for i in bptt_index_generator:
             current_tokens = {'tokens': input_tokens['tokens'][:, i: i + bptt_limit]}
             target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
-            model.forward(current_tokens, target_tokens=target_tokens, hidden_state=hidden_state)
+            model.forward(current_tokens, input_tokens, target_tokens=target_tokens, hidden_state=hidden_state)
             metrics = model.get_metrics(reset=True)
             description = description_from_metrics(metrics)
             evaluation_generator.set_description(description)
