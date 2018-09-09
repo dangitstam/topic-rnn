@@ -144,6 +144,13 @@ def rnn_forward(module: Callable[[PackedSequence, Optional[RnnState]],
     return (unpacked_sequence_tensor.index_select(0, restoration_indices),
             final_states.index_select(1, restoration_indices))
 
-def description_from_metrics(metrics: Dict[str, float]) -> str:
-    return ', '.join(["%s: %.4f" % (name, value) for name, value in
-                      metrics.items() if not name.startswith("_")]) + " ||"
+def description_from_metrics(metrics: Dict[str, float],
+                             batch_iteration: int = None) -> str:
+    description = ', '.join(["%s: %.4f" % (name, value)
+                             for name, value in metrics.items()
+                             if not name.startswith("_")]) + " ||"
+
+    if batch_iteration:
+        description = ("Batch #: %.4d" % batch_iteration) + description
+
+    return description

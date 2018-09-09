@@ -1,10 +1,10 @@
 import argparse
 import logging
 import os
-from typing import Iterable
+import shutil
+from typing import Iterable, List
 
 import torch
-import torch.nn as nn
 from allennlp.data.instance import Instance
 from allennlp.data.iterators.basic_iterator import BasicIterator
 from allennlp.data.iterators.bucket_iterator import BucketIterator
@@ -19,9 +19,9 @@ from tqdm import tqdm
 
 from data import read_data
 from library.models.topic_rnn import TopicRNN
-from library.models.util import description_from_metrics, rnn_forward
+from library.models.util import description_from_metrics
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 RNNs = {
     "lstm": torch.nn.LSTM,
@@ -84,7 +84,7 @@ def main():
                               "validation-period weight updates."))
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed to use")
-    parser.add_argument("--cuda-device", default=-1,
+    parser.add_argument("--cuda-device", type=int, default=-1,
                         help="Train or evaluate with GPU.")
     parser.add_argument("--demo", action="store_true",
                         help="Run the interactive web demo.")
@@ -107,8 +107,9 @@ def main():
     # Define the model.
     model = TopicRNN(
         train_vocab,
-        BasicTextFieldEmbedder({"tokens": Embedding(train_vocab.get_vocab_size('tokens'), args.embedding_dim,
-            padding_index=0)}),
+        BasicTextFieldEmbedder({"tokens": Embedding(train_vocab.get_vocab_size('tokens'),
+                                                    args.embedding_dim,
+                                                    padding_index=0)}),
         PytorchSeq2SeqWrapper(RNNs[args.rnn_type](args.embedding_dim, args.hidden_size, batch_first=True))
     )
 
@@ -118,27 +119,28 @@ def main():
     # Optimize unfrozen weights only.
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr)
 
-    for _ in range(10):  # Loop over epochs.
-        train_epoch(model, train_vocab, train_dataset, validation_dataset, optimizer,
-                    args.save_dir, cuda_device=args.cuda_device)
+    for epoch in range(args.num_epochs):  # Loop over epochs.
+        train_epoch(model, train_vocab, train_dataset, validation_dataset, optimizer, args.save_dir, epoch,
+                    cuda_device=args.cuda_device)
 
 def train_epoch(model: TopicRNN,
                 vocab: Vocabulary,
                 train_dataset: Iterable[Instance],
                 validation_dataset: Iterable[Instance],
                 optimizer: torch.optim.Optimizer,
-                save_dir: str,
+                serialization_dir: str,
+                epoch: int,
                 batch_size: int = 32,
                 bptt_limit: int = 35,
                 cuda_device: int = -1):
     model.train()
+    best_model_metrics = None
 
     # Batch by similar lengths for efficient training.
     iterator = BucketIterator(batch_size=batch_size, sorting_keys=[("input_tokens", "num_tokens")])
     iterator.index_with(vocab)  # Index with the collected vocab.
     train_generator = iterator(train_dataset, num_epochs=1, cuda_device=cuda_device)
     for batch_iteration, batch in enumerate(train_generator):
-        print("Batch {}:".format(batch_iteration))
 
         # Shape(s): (batch, max_sequence_length), (batch,)
         input_tokens = batch['input_tokens']
@@ -150,12 +152,13 @@ def train_epoch(model: TopicRNN,
             current_tokens = {'tokens': input_tokens['tokens'][:, i: i + bptt_limit]}
             target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
 
-            output_dict, hidden_state = model.forward(current_tokens, target_tokens=target_tokens,
-                hidden_state=hidden_state)
+            output_dict, hidden_state = model.forward(current_tokens,
+                                                      target_tokens=target_tokens,
+                                                      hidden_state=hidden_state)
 
             # Display progress.
             metrics = model.get_metrics()
-            description = description_from_metrics(metrics)
+            description = description_from_metrics(metrics, batch_iteration=batch_iteration)
             bptt_index_generator.set_description(description, refresh=False)
 
             # Compute gradients and step.
@@ -166,7 +169,72 @@ def train_epoch(model: TopicRNN,
             # Detach hidden state.
             hidden_state = hidden_state.detach()
 
-    # TODO: Make evaluate that uses vocab
+    # Save the model at the end of each epoch with final validation results, preserving
+    # the best seen model the same way AllenNLP does.
+    validation_metrics = evaluate(model, vocab, validation_dataset, cuda_device=cuda_device)
+    is_best = best_model_metrics is None or validation_metrics['loss'] < best_model_metrics['loss']  # pylint: disable=E1136
+    save_checkpoint(model, optimizer, validation_metrics, epoch, serialization_dir, is_best)
+    best_model_metrics = validation_metrics
+
+def evaluate(model: TopicRNN,
+             vocab: Vocabulary,
+             evaluation_dataset: Iterable[Instance],
+             batch_size: int = 32,
+             bptt_limit: int = 35,
+             cuda_device: int = -1):
+    model.eval()
+
+    # Batch by similar lengths for efficient training.
+    evaluation_iterator = BasicIterator(batch_size=batch_size)
+    evaluation_iterator.index_with(vocab)
+    evaluation_generator = tqdm(evaluation_iterator(evaluation_dataset,
+                                                    num_epochs=1,
+                                                    shuffle=False,
+                                                    cuda_device=cuda_device,
+                                                    for_training=False))
+
+    # Reset metrics and compute them over validation.
+    model.get_metrics(reset=True)
+    for batch in evaluation_generator:
+
+        # Shape(s): (batch, max_sequence_length), (batch,)
+        input_tokens = batch['input_tokens']
+
+        hidden_state = None
+        max_sequence_length = input_tokens['tokens'].size(-1)
+        bptt_index_generator = tqdm(range(max_sequence_length - bptt_limit))
+        for i in bptt_index_generator:
+            current_tokens = {'tokens': input_tokens['tokens'][:, i: i + bptt_limit]}
+            target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
+            model.forward(current_tokens, target_tokens=target_tokens, hidden_state=hidden_state)
+            metrics = model.get_metrics(reset=True)
+            description = description_from_metrics(metrics)
+            evaluation_generator.set_description(description)
+
+    # Collect metrics and reset again before resuming training.
+    metrics = model.get_metrics(reset=True)
+
+    return metrics
+
+def save_checkpoint(model: TopicRNN,
+                    optimizer: torch.optim.Optimizer,
+                    validation_metrics: List[float],
+                    epoch: int,
+                    serialization_dir: str,
+                    is_best: bool):
+    model_path = os.path.join(serialization_dir, "model_state_epoch_{}.th".format(epoch))
+    model_state = model.state_dict()
+    torch.save(model_state, model_path)
+    if is_best:
+        logger.info("Best validation performance so far. "
+                    "Copying weights to '%s/best.th'.", serialization_dir)
+        shutil.copyfile(model_path, os.path.join(serialization_dir, "best.th"))
+
+    training_state = {'epoch': epoch, 'validation_metrics': validation_metrics,
+                      'optimizer': optimizer.state_dict()}
+    training_path = os.path.join(serialization_dir, "training_state_epoch_{}.th".format(epoch))
+    torch.save(training_state, training_path)
+
 
 if __name__ == '__main__':
     main()

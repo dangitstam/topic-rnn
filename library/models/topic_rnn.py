@@ -1,6 +1,5 @@
-import sys
 from collections import Counter
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -13,17 +12,14 @@ from allennlp.modules import (FeedForward, Seq2SeqEncoder, TextFieldEmbedder,
 from allennlp.modules.seq2vec_encoders.pytorch_seq2vec_wrapper import \
     PytorchSeq2VecWrapper
 from allennlp.nn import InitializerApplicator, RegularizerApplicator, util
-from allennlp.nn.util import (get_lengths_from_binary_sequence_mask,
-                              sort_batch_by_length)
 from allennlp.training.metrics import Average, CategoricalAccuracy
 from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.nn.modules.linear import Linear
-from torch.nn.utils.rnn import PackedSequence, pack_padded_sequence
 
 from library.dataset_readers.util import STOP_WORDS
 from library.metrics.perplexity import Perplexity
-from library.models.util import description_from_metrics, rnn_forward
+from library.models.util import rnn_forward
 
 
 @Model.register("topic_rnn")
@@ -206,7 +202,8 @@ class TopicRNN(Model):
                 input_tokens: Dict[str, torch.LongTensor],
                 target_tokens: Dict[str, torch.LongTensor] = None,
                 sentiment: Dict[str, torch.LongTensor] = None,
-                hidden_state: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
+                hidden_state: torch.LongTensor = None,
+                exclude_topic_additions: bool = False) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
