@@ -110,7 +110,8 @@ def main():
         BasicTextFieldEmbedder({"tokens": Embedding(train_vocab.get_vocab_size('tokens'),
                                                     args.embedding_dim,
                                                     padding_index=0)}),
-        PytorchSeq2SeqWrapper(RNNs[args.rnn_type](args.embedding_dim, args.hidden_size, batch_first=True))
+        PytorchSeq2SeqWrapper(RNNs[args.rnn_type](args.embedding_dim, args.hidden_size, batch_first=True)),
+        topic_dim=300
     )
 
     if args.cuda_device >= 0:

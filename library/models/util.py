@@ -151,6 +151,6 @@ def description_from_metrics(metrics: Dict[str, float],
                              if not name.startswith("_")]) + " ||"
 
     if batch_iteration:
-        description = ("Batch #: %.4d" % batch_iteration) + description
+        description = ("Batch #: %.4d " % batch_iteration) + description
 
     return description
