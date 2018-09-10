@@ -150,7 +150,7 @@ class TopicRNN(Model):
                 stopless_dim,
                 2,
                 [500, 500],
-                torch.nn.ReLU()
+                torch.nn.Tanh()
             )
 
             # The shape for the feature vector for sentiment classification.
@@ -251,12 +251,12 @@ class TopicRNN(Model):
             self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
 
             mu = self.mu_linear(mapped_term_frequencies)
-            log_sigma = self.sigma_linear(mapped_term_frequencies)
+            log_sigma_squared = self.sigma_linear(mapped_term_frequencies)
 
             # I .Compute KL-Divergence.
             # A closed-form solution exists since we're assuming q is drawn
             # from a normal distribution.
-            kl_divergence = torch.ones_like(mu) + 2 * log_sigma - (mu ** 2) - (torch.exp(log_sigma) ** 2)
+            kl_divergence = torch.ones_like(mu) + log_sigma_squared - (mu ** 2) - torch.exp(log_sigma_squared)
 
             # Sum along the topic dimension and add const.
             kl_divergence = torch.sum(kl_divergence) / 2
@@ -287,7 +287,7 @@ class TopicRNN(Model):
             relevant_output_mask = output_mask.contiguous()
 
             # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
-            relevant_stopword_output = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
+            relevant_stopword_output = self._compute_stopword_mask(input_tokens).contiguous().to(device=device)
             masked_stopword_criterion = nn.BCEWithLogitsLoss(relevant_output_mask.float())
             stopword_loss = masked_stopword_criterion(stopword_raw_probabilities, relevant_stopword_output.float())
 
@@ -297,13 +297,13 @@ class TopicRNN(Model):
                 epsilon = self.noise.rsample().to(device=device)
 
                 # Compute noisy topic proportions given Gaussian parameters.
-                theta = mu + torch.exp(log_sigma) * epsilon
+                theta = mu + torch.sqrt(torch.exp(log_sigma_squared)) * epsilon
 
                 # II. Compute cross entropy against next words for the current sample of noise.
                 # Padding and OOV tokens are indexed at 0 and 1.
                 topic_additions = torch.mm(theta, self.beta)
-                topic_additions.t()[0] = 0  # Padding will be treated as stops.
-                topic_additions.t()[1] = 0  # Unknowns will be treated as stops.
+                # topic_additions.t()[0] = 0  # Padding will be treated as stops.
+                # topic_additions.t()[1] = 0  # Unknowns will be treated as stops.
 
                 # Stop words have no contribution via topics.
                 gated_topic_additions = (1 - stopword_predictions).float() * topic_additions.unsqueeze(1).expand_as(logits)
