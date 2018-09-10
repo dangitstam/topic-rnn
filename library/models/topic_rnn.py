@@ -294,7 +294,7 @@ class TopicRNN(Model):
             for _ in range(self.num_samples):
 
                 # Compute noise for sampling.
-                epsilon = self.noise.rsample().to(device=device)
+                epsilon = self.noise.rsample(sample_shape=torch.Size([log_sigma_squared.size(0)])).to(device=device)
 
                 # Compute noisy topic proportions given Gaussian parameters.
                 theta = mu + torch.sqrt(torch.exp(log_sigma_squared)) * epsilon
