@@ -17,7 +17,7 @@ from overrides import overrides
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.nn.modules.linear import Linear
 
-from library.dataset_readers.util import STOP_WORDS
+from library.dataset_readers.util import STOP_WORDS_2
 from library.metrics.perplexity import Perplexity
 from library.models.util import rnn_forward
 
@@ -115,7 +115,7 @@ class TopicRNN(Model):
                 assert self.tokens_to_index[DEFAULT_PADDING_TOKEN] == 0 and \
                        self.tokens_to_index[DEFAULT_OOV_TOKEN] == 1
                 for token, _ in self.tokens_to_index.items():
-                    if token not in STOP_WORDS:
+                    if token not in STOP_WORDS_2:
                         vocab.add_token_to_namespace(token, "stopless")
 
                 # Since a vocabulary with the stopless namespace hasn't been saved, save one for convienience.
@@ -123,7 +123,7 @@ class TopicRNN(Model):
 
             # Compute stop indices in the normal vocab space to prevent stop words
             # from contributing to the topic additions.
-            self.stop_indices = torch.LongTensor([vocab.get_token_index(stop) for stop in STOP_WORDS])
+            self.stop_indices = torch.LongTensor([vocab.get_token_index(stop) for stop in STOP_WORDS_2])
 
             # Learnable topics.
             # TODO: How should these be initialized?
@@ -385,7 +385,7 @@ class TopicRNN(Model):
         res = torch.zeros_like(output_tokens['tokens'])
         for i, row in enumerate(output_tokens['tokens']):
             words = [self.vocab.get_token_from_index(index) for index in row.tolist()]
-            res[i] = torch.LongTensor([int(word in STOP_WORDS) for word in words])
+            res[i] = torch.LongTensor([int(word in STOP_WORDS_2) for word in words])
 
         return res
 
