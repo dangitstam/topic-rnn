@@ -278,8 +278,6 @@ class TopicRNN(Model):
 
             # Shape: (batch, sequence length)
             stopword_raw_probabilities = torch.matmul(encoded_input, self.stopword_projection_layer)
-            stopword_predictions = torch.sigmoid(stopword_raw_probabilities) >= 0.5
-            stopword_predictions = stopword_predictions.unsqueeze(2).expand_as(logits)
 
             # Mask the output for proper loss calculation.
             output_mask = util.get_text_field_mask(target_tokens)
@@ -287,9 +285,12 @@ class TopicRNN(Model):
             relevant_output_mask = output_mask.contiguous()
 
             # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
-            relevant_stopword_output = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
-            masked_stopword_criterion = nn.BCEWithLogitsLoss(relevant_output_mask.float())
-            stopword_loss = masked_stopword_criterion(stopword_raw_probabilities, relevant_stopword_output.float())
+            observed_stopwords = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
+            stopword_criterion = nn.BCEWithLogitsLoss(observed_stopwords.float())
+            stopword_loss = stopword_criterion(stopword_raw_probabilities, observed_stopwords.float())
+
+            # Expand to gate all topic additions when anticipating a stopword.
+            observed_stopwords_expanded = observed_stopwords.unsqueeze(2).expand_as(logits)
 
             for _ in range(self.num_samples):
 
@@ -307,7 +308,7 @@ class TopicRNN(Model):
                 # topic_additions.t()[1] = 0  # Unknowns will be treated as stops.
 
                 # Stop words have no contribution via topics.
-                gated_topic_additions = (1 - stopword_predictions).float() * topic_additions.unsqueeze(1).expand_as(logits)
+                gated_topic_additions = (1 - observed_stopwords_expanded).float() * topic_additions.unsqueeze(1).expand_as(logits)
                 self.metrics['topic_contribution'](gated_topic_additions.sum().item())
 
                 cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits + gated_topic_additions,

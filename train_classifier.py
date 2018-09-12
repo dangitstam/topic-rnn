@@ -145,7 +145,6 @@ def train_epoch(model: TopicRNN,
                 serialization_dir: str,
                 epoch: int,
                 batch_size: int = 32,
-                bptt_limit: int = 35,
                 cuda_device: int = -1):
     model.train()
     best_model_metrics = None
@@ -185,7 +184,6 @@ def evaluate(model: TopicRNN,
              vocab: Vocabulary,
              evaluation_dataset: Iterable[Instance],
              batch_size: int = 32,
-             bptt_limit: int = 35,
              cuda_device: int = -1):
     model.eval()
 
