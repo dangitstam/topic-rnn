@@ -329,6 +329,12 @@ class TopicRNN(Model):
 
         return output_dict, hidden_state
 
+    def set_to_classification_mode(self):
+        self.text_to_vec = PytorchSeq2VecWrapper(self.text_encoder._modules['_module'])
+        for name, param in self.named_parameters():
+            if "sentiment_classifier" not in name:
+                param.requires_grad = False
+
     def _classify_sentiment(self,  # type: ignore
                             frequency_tokens: Dict[str, torch.LongTensor],
                             mu: torch.Tensor,
