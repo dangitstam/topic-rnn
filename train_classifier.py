@@ -108,7 +108,16 @@ def main():
     train_vocab.save_to_files(vocab_dir)
 
     # Define the model.
-    model = torch.load(args.model_weights_path)
+    model = TopicRNN(
+        train_vocab,
+        BasicTextFieldEmbedder({"tokens": Embedding(train_vocab.get_vocab_size('tokens'),
+                                                    args.embedding_dim,
+                                                    padding_index=0)}),
+        PytorchSeq2SeqWrapper(RNNs[args.rnn_type](args.embedding_dim, args.hidden_size, batch_first=True)),
+        topic_dim=300
+    )
+
+    model.load_state_dict(torch.load(args.model_weights_path))
 
     # Set to classification mode.
     model.set_to_classification_mode()
