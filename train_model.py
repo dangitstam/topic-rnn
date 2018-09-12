@@ -209,7 +209,7 @@ def evaluate(model: TopicRNN,
             current_tokens = {'tokens': input_tokens['tokens'][:, i: i + bptt_limit]}
             target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
             model.forward(current_tokens, input_tokens, target_tokens=target_tokens, hidden_state=hidden_state)
-            metrics = model.get_metrics(reset=True)
+            metrics = model.get_metrics()
             description = description_from_metrics(metrics)
             evaluation_generator.set_description(description)
 
