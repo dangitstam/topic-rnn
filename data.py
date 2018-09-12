@@ -20,6 +20,9 @@ def read_data(imdb_train_path: str,
     # Make a vocabulary object from the train set
     train_vocab = Vocabulary.from_instances(train_dataset, max_vocab_size=max_vocab_size)
 
+    # Pre-caution: Unsupervised output won't include positive sentiment.
+    train_vocab.add_token_to_namespace("positive", "labels")
+
     # Read IMDB validation set
     logger.info("Reading IMDB validation set at %s", imdb_dev_path)
     validation_dataset = imdb_reader.read(imdb_dev_path)

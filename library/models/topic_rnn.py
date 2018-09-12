@@ -173,7 +173,7 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 10
+        self.num_samples = 50
 
         initializer(self)
 
@@ -287,7 +287,7 @@ class TopicRNN(Model):
             relevant_output_mask = output_mask.contiguous()
 
             # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
-            relevant_stopword_output = self._compute_stopword_mask(input_tokens).contiguous().to(device=device)
+            relevant_stopword_output = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
             masked_stopword_criterion = nn.BCEWithLogitsLoss(relevant_output_mask.float())
             stopword_loss = masked_stopword_criterion(stopword_raw_probabilities, relevant_stopword_output.float())
 
@@ -298,6 +298,7 @@ class TopicRNN(Model):
 
                 # Compute noisy topic proportions given Gaussian parameters.
                 theta = mu + torch.sqrt(torch.exp(log_sigma_squared)) * epsilon
+                theta = torch.nn.functional.softmax(theta, dim=-1)
 
                 # II. Compute cross entropy against next words for the current sample of noise.
                 # Padding and OOV tokens are indexed at 0 and 1.

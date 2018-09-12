@@ -37,11 +37,11 @@ def main():
 
     parser.add_argument("--imdb-train-path", type=str,
                         default=os.path.join(
-                            project_root, "data", "valid_unsup.jsonl"),
+                            project_root, "data", "train_unsup_tiny.jsonl"),
                         help="Path to the IMDB training data.")
     parser.add_argument("--imdb-dev-path", type=str,
                         default=os.path.join(
-                            project_root, "data", "valid_unsup.jsonl"),
+                            project_root, "data", "valid_unsup_tiny.jsonl"),
                         help="Path to the IMDB dev data.")
     parser.add_argument("--imdb-test-path", type=str,
                         default=os.path.join(
@@ -122,7 +122,7 @@ def main():
 
     for epoch in range(args.num_epochs):  # Loop over epochs.
         train_epoch(model, train_vocab, train_dataset, validation_dataset, optimizer, args.save_dir, epoch,
-                    cuda_device=args.cuda_device)
+                    batch_size=args.batch_size, cuda_device=args.cuda_device)
 
 def train_epoch(model: TopicRNN,
                 vocab: Vocabulary,
@@ -192,8 +192,7 @@ def evaluate(model: TopicRNN,
     evaluation_generator = tqdm(evaluation_iterator(evaluation_dataset,
                                                     num_epochs=1,
                                                     shuffle=False,
-                                                    cuda_device=cuda_device,
-                                                    for_training=False))
+                                                    cuda_device=cuda_device))
 
     # Reset metrics and compute them over validation.
     model.get_metrics(reset=True)
