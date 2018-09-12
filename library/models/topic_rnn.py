@@ -75,8 +75,7 @@ class TopicRNN(Model):
             'stopword_loss': Average(),
             'mapped_term_freq_sum': Average(),
             'mapped_term_freq_filled_ratio': Average(),
-            'topic_contribution': Average(),
-            'sentiment': CategoricalAccuracy()
+            'topic_contribution': Average()
         }
 
         self.classification_mode = classification_mode
@@ -163,7 +162,7 @@ class TopicRNN(Model):
                 sentiment_input_size,
                 2,
                 [50, 2],
-                torch.nn.Sigmoid(),
+                torch.nn.Tanh(),
             )
 
         if freeze_feature_extraction:
@@ -174,7 +173,7 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 50
+        self.num_samples = 1
 
         initializer(self)
 
@@ -331,6 +330,7 @@ class TopicRNN(Model):
         return output_dict, hidden_state
 
     def set_to_classification_mode(self):
+        self.metrics['sentiment'] = CategoricalAccuracy()
         self.text_to_vec = PytorchSeq2VecWrapper(self.text_encoder)
         for name, param in self.named_parameters():
             if "sentiment_classifier" not in name:
@@ -344,7 +344,6 @@ class TopicRNN(Model):
         """
         Using the entire review (frequency_tokens), classify it as positive or negative.
         """
-
         # Encode the input text.
         # Shape: (batch, sequence length, hidden size)
         embedded_input = self.text_field_embedder(frequency_tokens)
@@ -362,7 +361,7 @@ class TopicRNN(Model):
         loss = self.sentiment_criterion(logits, sentiment)
 
         self.metrics['sentiment'](logits, sentiment)
-
+        self.metrics['cross_entropy'](loss.item())
         return loss
 
     def _compute_word_frequency_vector(self, frequency_tokens: Dict[str, torch.LongTensor]) -> Dict[str, torch.Tensor]:

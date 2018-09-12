@@ -37,11 +37,11 @@ def main():
 
     parser.add_argument("--imdb-train-path", type=str,
                         default=os.path.join(
-                            project_root, "data", "train_unsup_tiny.jsonl"),
+                            project_root, "data", "train_unsup.jsonl"),
                         help="Path to the IMDB training data.")
     parser.add_argument("--imdb-dev-path", type=str,
                         default=os.path.join(
-                            project_root, "data", "valid_unsup_tiny.jsonl"),
+                            project_root, "data", "valid_unsup.jsonl"),
                         help="Path to the IMDB dev data.")
     parser.add_argument("--imdb-test-path", type=str,
                         default=os.path.join(
@@ -140,16 +140,15 @@ def train_epoch(model: TopicRNN,
     # Batch by similar lengths for efficient training.
     iterator = BucketIterator(batch_size=batch_size, sorting_keys=[("input_tokens", "num_tokens")])
     iterator.index_with(vocab)  # Index with the collected vocab.
-    train_generator = iterator(train_dataset, num_epochs=1, cuda_device=cuda_device)
-    for batch_iteration, batch in enumerate(train_generator):
+    train_generator = tqdm(enumerate(iterator(train_dataset, num_epochs=1, cuda_device=cuda_device)))
+    for batch_iteration, batch in train_generator:
 
         # Shape(s): (batch, max_sequence_length), (batch,)
         input_tokens = batch['input_tokens']
 
         hidden_state = None
         max_sequence_length = input_tokens['tokens'].size(-1)
-        bptt_index_generator = tqdm(range(max_sequence_length - bptt_limit))
-        for i in bptt_index_generator:
+        for i in range(0, max_sequence_length - bptt_limit, bptt_limit):
             current_tokens = {'tokens': input_tokens['tokens'][:, i: i + bptt_limit]}
             target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
 
@@ -161,7 +160,7 @@ def train_epoch(model: TopicRNN,
             # Display progress.
             metrics = model.get_metrics()
             description = description_from_metrics(metrics, batch_iteration=batch_iteration)
-            bptt_index_generator.set_description(description, refresh=False)
+            train_generator.set_description(description, refresh=False)
 
             # Compute gradients and step.
             optimizer.zero_grad()
@@ -174,26 +173,26 @@ def train_epoch(model: TopicRNN,
     # Save the model at the end of each epoch with final validation results, preserving
     # the best seen model the same way AllenNLP does.
     validation_metrics = evaluate(model, vocab, validation_dataset, cuda_device=cuda_device)
-    is_best = best_model_metrics is None or \
-        validation_metrics['averaged_cross_entropy_loss'] < best_model_metrics['averaged_cross_entropy_loss']  # pylint: disable=E1136
+    is_best = best_model_metrics is None or validation_metrics['cross_entropy'] < best_model_metrics['cross_entropy']  # pylint: disable=E1136
     save_checkpoint(model, optimizer, validation_metrics, epoch, serialization_dir, is_best)
     best_model_metrics = validation_metrics
+
 
 def evaluate(model: TopicRNN,
              vocab: Vocabulary,
              evaluation_dataset: Iterable[Instance],
-             batch_size: int = 32,
+             batch_size: int = 64, 
              bptt_limit: int = 35,
              cuda_device: int = -1):
     model.eval()
 
     # Batch by similar lengths for efficient training.
-    evaluation_iterator = BasicIterator(batch_size=batch_size)
+    evaluation_iterator = BucketIterator(batch_size=batch_size, sorting_keys=[("input_tokens", "num_tokens")])
     evaluation_iterator.index_with(vocab)
     evaluation_generator = tqdm(evaluation_iterator(evaluation_dataset,
-                                                    num_epochs=1,
-                                                    shuffle=False,
-                                                    cuda_device=cuda_device))
+                                                   num_epochs=1,
+                                                   shuffle=False,
+                                                   cuda_device=cuda_device))
 
     # Reset metrics and compute them over validation.
     model.get_metrics(reset=True)
@@ -201,10 +200,9 @@ def evaluate(model: TopicRNN,
 
         # Shape(s): (batch, max_sequence_length), (batch,)
         input_tokens = batch['input_tokens']
-
         hidden_state = None
         max_sequence_length = input_tokens['tokens'].size(-1)
-        bptt_index_generator = tqdm(range(max_sequence_length - bptt_limit))
+        bptt_index_generator = range(0, max_sequence_length - bptt_limit, bptt_limit)
         for i in bptt_index_generator:
             current_tokens = {'tokens': input_tokens['tokens'][:, i: i + bptt_limit]}
             target_tokens = {'tokens': input_tokens['tokens'][:, (i + 1): (i + 1) + bptt_limit]}
@@ -216,6 +214,9 @@ def evaluate(model: TopicRNN,
     # Collect metrics and reset again before resuming training.
     metrics = model.get_metrics(reset=True)
 
+    # Set back to training mode.
+    model.train()
+
     return metrics
 
 def save_checkpoint(model: TopicRNN,
@@ -224,14 +225,13 @@ def save_checkpoint(model: TopicRNN,
                     epoch: int,
                     serialization_dir: str,
                     is_best: bool):
-    model_path = os.path.join(serialization_dir, "model_state_epoch_{}.th".format(epoch))
+    model_path = os.path.join(serialization_dir, "model_state_batch_epoch_{}.th".format(epoch))
     model_state = model.state_dict()
     torch.save(model_state, model_path)
     if is_best:
         logger.info("Best validation performance so far. "
                     "Copying weights to '%s/best.th'.", serialization_dir)
         shutil.copyfile(model_path, os.path.join(serialization_dir, "best.th"))
-        archive_model(serialization_dir)
 
     training_state = {'epoch': epoch, 'validation_metrics': validation_metrics,
                       'optimizer': optimizer.state_dict()}

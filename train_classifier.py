@@ -34,17 +34,20 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     project_root = os.path.abspath(os.path.realpath(os.path.join(
         os.path.dirname(os.path.realpath(__file__)))))
+    parser.add_argument("--vocab-path", type=str,
+                        default=os.path.join(
+                            project_root, "saved_models", "train_vocab")),
     parser.add_argument("--model-weights-path", type=str,
                         default=os.path.join(
                             project_root, "saved_models", "best.th"),
                         help="Path to the pre-trained model.")
     parser.add_argument("--imdb-train-path", type=str,
                         default=os.path.join(
-                            project_root, "data", "train_unsup_tiny.jsonl"),
+                            project_root, "data", "train_labeled_tiny.jsonl"),
                         help="Path to the IMDB training data.")
     parser.add_argument("--imdb-dev-path", type=str,
                         default=os.path.join(
-                            project_root, "data", "valid_unsup_tiny.jsonl"),
+                            project_root, "data", "valid_labeled_tiny.jsonl"),
                         help="Path to the IMDB dev data.")
     parser.add_argument("--imdb-test-path", type=str,
                         default=os.path.join(
@@ -99,8 +102,10 @@ def main():
 
     # Read the training and validaton dataset into lists of instances
     # and get a vocabulary from the train set.
-    train_dataset, train_vocab, validation_dataset = read_data(
+    train_dataset, _, validation_dataset = read_data(
         args.imdb_train_path, args.imdb_dev_path, args.max_vocab_size)
+
+    train_vocab = Vocabulary.from_files(args.vocab_path)
 
     # Save the train_vocab to a file.
     vocab_dir = os.path.join(args.save_dir, "train_vocab")
@@ -222,7 +227,6 @@ def save_checkpoint(model: TopicRNN,
         logger.info("Best validation performance so far. "
                     "Copying weights to '%s/best.th'.", serialization_dir)
         shutil.copyfile(model_path, os.path.join(serialization_dir, "best.th"))
-        archive_model(serialization_dir)
 
     training_state = {'epoch': epoch, 'validation_metrics': validation_metrics,
                       'optimizer': optimizer.state_dict()}
