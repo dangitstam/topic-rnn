@@ -237,21 +237,21 @@ class TopicRNN(Model):
         # is running on a GPU, these tensors need to be moved to the correct device.
         device = input_tokens['tokens'].device
 
+        # Compute Gaussian parameters.
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+        mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
+
+        # If the inference network ever learns to output just 0, something has gone wrong.
+        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
+        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
+
+        mu = self.mu_linear(mapped_term_frequencies)
+        log_sigma_squared = self.sigma_linear(mapped_term_frequencies)
+
         # Train the RNNs and backprop BPTT steps at a time.
         # Preserve the hidden state between BPTT chunks.
         if target_tokens:
             aggregate_cross_entropy_loss = 0
-
-            # Compute Gaussian parameters.
-            stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
-            mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
-
-            # If the inference network ever learns to output just 0, something has gone wrong.
-            self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
-            self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
-
-            mu = self.mu_linear(mapped_term_frequencies)
-            log_sigma_squared = self.sigma_linear(mapped_term_frequencies)
 
             # I .Compute KL-Divergence.
             # A closed-form solution exists since we're assuming q is drawn
