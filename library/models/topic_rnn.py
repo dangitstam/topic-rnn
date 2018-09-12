@@ -75,7 +75,8 @@ class TopicRNN(Model):
             'stopword_loss': Average(),
             'mapped_term_freq_sum': Average(),
             'mapped_term_freq_filled_ratio': Average(),
-            'topic_contribution': Average()
+            'topic_contribution': Average(),
+            'sentiment': CategoricalAccuracy()
         }
 
         self.classification_mode = classification_mode
