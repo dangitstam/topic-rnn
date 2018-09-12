@@ -9,7 +9,7 @@ from allennlp.data.instance import Instance
 from allennlp.data.iterators.basic_iterator import BasicIterator
 from allennlp.data.iterators.bucket_iterator import BucketIterator
 from allennlp.data.vocabulary import Vocabulary
-from allennlp.models.archival import load_archive
+from allennlp.models.archival import load_archive, archive_model
 from allennlp.modules.seq2seq_encoders.pytorch_seq2seq_wrapper import \
     PytorchSeq2SeqWrapper
 from allennlp.modules.text_field_embedders.basic_text_field_embedder import \
@@ -174,7 +174,8 @@ def train_epoch(model: TopicRNN,
     # Save the model at the end of each epoch with final validation results, preserving
     # the best seen model the same way AllenNLP does.
     validation_metrics = evaluate(model, vocab, validation_dataset, cuda_device=cuda_device)
-    is_best = best_model_metrics is None or validation_metrics['loss'] < best_model_metrics['loss']  # pylint: disable=E1136
+    is_best = best_model_metrics is None or \
+        validation_metrics['averaged_cross_entropy_loss'] < best_model_metrics['averaged_cross_entropy_loss']  # pylint: disable=E1136
     save_checkpoint(model, optimizer, validation_metrics, epoch, serialization_dir, is_best)
     best_model_metrics = validation_metrics
 
@@ -230,6 +231,7 @@ def save_checkpoint(model: TopicRNN,
         logger.info("Best validation performance so far. "
                     "Copying weights to '%s/best.th'.", serialization_dir)
         shutil.copyfile(model_path, os.path.join(serialization_dir, "best.th"))
+        archive_model(serialization_dir)
 
     training_state = {'epoch': epoch, 'validation_metrics': validation_metrics,
                       'optimizer': optimizer.state_dict()}
