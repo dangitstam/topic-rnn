@@ -73,8 +73,6 @@ class TopicRNN(Model):
             'cross_entropy': Average(),
             'negative_kl_divergence': Average(),
             'stopword_loss': Average(),
-            'mapped_term_freq_sum': Average(),
-            'mapped_term_freq_filled_ratio': Average(),
             'topic_contribution': Average()
         }
 
@@ -130,27 +128,25 @@ class TopicRNN(Model):
             self.beta = nn.Parameter(torch.empty(topic_dim, self.vocab_size))
             nn.init.uniform_(self.beta)
 
+            stopless_dim = vocab.get_vocab_size("stopless")
+
             # mu: The mean of the variational distribution.
-            self.mu_linear = nn.Linear(500, self.topic_dim)
+            self.mu_linear = nn.Linear(500, topic_dim)
             nn.init.uniform_(self.mu_linear.weight)
 
             # sigma: The root standard deviation of the variational distribution.
-            self.sigma_linear = nn.Linear(500, self.topic_dim)
+            self.sigma_linear = nn.Linear(500, topic_dim)
             nn.init.uniform_(self.sigma_linear.weight)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
 
-            stopless_dim = vocab.get_vocab_size("stopless")
+            # TODO: Make this a simple feed-forward.
             self.variational_autoencoder = variational_autoencoder or FeedForward(
-                # Takes as input the word frequencies in the stopless dimension and projects
-                # the word frequencies into a latent topic representation.
-                #
-                # Each latent representation will help tune the variational dist.'s parameters.
                 stopless_dim,
                 2,
                 [500, 500],
-                torch.nn.Tanh()
+                torch.nn.ReLU()
             )
 
             # The shape for the feature vector for sentiment classification.
@@ -238,25 +234,30 @@ class TopicRNN(Model):
         device = input_tokens['tokens'].device
 
         # Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
+        stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
-        # If the inference network ever learns to output just 0, something has gone wrong.
-        self.metrics['mapped_term_freq_sum'](mapped_term_frequencies.sum().item())
-        self.metrics['mapped_term_freq_filled_ratio']((mapped_term_frequencies != 0.0).sum().item() / (mapped_term_frequencies.numel()))
-
         mu = self.mu_linear(mapped_term_frequencies)
-        log_sigma_squared = self.sigma_linear(mapped_term_frequencies)
+        log_sigma = self.sigma_linear(mapped_term_frequencies)
+        sigma = torch.exp(log_sigma)
+
+        # print(mu.sum())
+        assert ((mu != 0).sum() / mu.numel()).item() == 1
 
         # Train the RNNs and backprop BPTT steps at a time.
         # Preserve the hidden state between BPTT chunks.
         if target_tokens:
             aggregate_cross_entropy_loss = 0
 
+            # Mask the output for proper loss calculation.
+            output_mask = util.get_text_field_mask(target_tokens)
+            relevant_output = target_tokens['tokens'].contiguous()
+            relevant_output_mask = output_mask.contiguous()
+
             # I .Compute KL-Divergence.
             # A closed-form solution exists since we're assuming q is drawn
             # from a normal distribution.
-            kl_divergence = torch.ones_like(mu) + log_sigma_squared - (mu ** 2) - torch.exp(log_sigma_squared)
+            kl_divergence = torch.ones_like(mu) + torch.log(sigma ** 2) - (mu ** 2) - sigma ** 2
 
             # Sum along the topic dimension and add const.
             kl_divergence = torch.sum(kl_divergence) / 2
@@ -271,6 +272,15 @@ class TopicRNN(Model):
             # Shape: (batch x BPTT limit x vocabulary size)
             logits = self.vocabulary_projection_layer(encoded_input)
 
+            if exclude_topic_additions:
+                cross_entropy_loss = util.sequence_cross_entropy_with_logits(logits,
+                                                                             relevant_output,
+                                                                             relevant_output_mask)
+                output_dict['loss'] = cross_entropy_loss
+                self.metrics['cross_entropy'](cross_entropy_loss.item())
+
+                return output_dict, hidden_state
+
             # Predict stopwords.
             # Note that for every logit in the projection into the vocabulary, the stop indicator
             # will be the same within time steps. This is because we predict whether forthcoming
@@ -278,11 +288,6 @@ class TopicRNN(Model):
 
             # Shape: (batch, sequence length)
             stopword_raw_probabilities = torch.matmul(encoded_input, self.stopword_projection_layer)
-
-            # Mask the output for proper loss calculation.
-            output_mask = util.get_text_field_mask(target_tokens)
-            relevant_output = target_tokens['tokens'].contiguous()
-            relevant_output_mask = output_mask.contiguous()
 
             # III. Compute stopword probabilities and gear RNN hidden states toward learning them.
             observed_stopwords = self._compute_stopword_mask(target_tokens).contiguous().to(device=device)
@@ -295,10 +300,10 @@ class TopicRNN(Model):
             for _ in range(self.num_samples):
 
                 # Compute noise for sampling.
-                epsilon = self.noise.rsample(sample_shape=torch.Size([log_sigma_squared.size(0)])).to(device=device)
+                epsilon = self.noise.rsample(sample_shape=torch.Size([log_sigma.size(0)])).to(device=device)
 
                 # Compute noisy topic proportions given Gaussian parameters.
-                theta = mu + torch.sqrt(torch.exp(log_sigma_squared)) * epsilon
+                theta = mu + sigma * epsilon
                 theta = torch.nn.functional.softmax(theta, dim=-1)
 
                 # II. Compute cross entropy against next words for the current sample of noise.

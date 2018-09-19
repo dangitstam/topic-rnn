@@ -8,7 +8,7 @@ from allennlp.data.fields import LabelField, TextField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenIndexer
 from allennlp.data.tokenizers import Tokenizer, WordTokenizer
-from allennlp.data.tokenizers.word_splitter import LettersDigitsWordSplitter
+from allennlp.data.tokenizers.word_splitter import JustSpacesWordSplitter
 from overrides import overrides
 
 import ujson
@@ -62,7 +62,7 @@ class IMDBReviewLanguageModelingReader(DatasetReader):
         self._tokenizer = tokenizer or WordTokenizer(
             start_tokens=[START_SYMBOL],
             end_tokens=[END_SYMBOL],
-            word_splitter=LettersDigitsWordSplitter()
+            word_splitter=JustSpacesWordSplitter()
         )
         self._token_indexers = token_indexers or {
             "tokens": SingleIdTokenIndexer(namespace="tokens", lowercase_tokens=True)
@@ -161,7 +161,8 @@ class IMDBReviewReader(DatasetReader):
         super().__init__(lazy)
         self._tokenizer = tokenizer or WordTokenizer(
             start_tokens=[START_SYMBOL],
-            end_tokens=[END_SYMBOL]
+            end_tokens=[END_SYMBOL],
+            word_splitter=JustSpacesWordSplitter()
         )
         self._token_indexers = token_indexers or {
             "tokens": SingleIdTokenIndexer(namespace="tokens", lowercase_tokens=True)
