@@ -35,6 +35,9 @@ def main():
     project_root = os.path.abspath(os.path.realpath(os.path.join(
         os.path.dirname(os.path.realpath(__file__)))))
 
+    parser.add_argument("--vocab-path", type=str,
+                        default=os.path.join(
+                            project_root, "saved_models", "train_vocab")),
     parser.add_argument("--imdb-train-path", type=str,
                         default=os.path.join(
                             project_root, "data", "train_unsup.jsonl"),
@@ -96,8 +99,14 @@ def main():
 
     # Read the training and validaton dataset into lists of instances
     # and get a vocabulary from the train set.
-    train_dataset, train_vocab, validation_dataset = read_data(
-        args.imdb_train_path, args.imdb_dev_path, args.max_vocab_size)
+    if args.vocab_path is not None:
+        train_dataset, _, validation_dataset = read_data(
+            args.imdb_train_path, args.imdb_dev_path, args.max_vocab_size, construct_vocab=False)
+
+        train_vocab = Vocabulary.from_files(args.vocab_path)
+    else:
+        train_dataset, train_vocab, validation_dataset = read_data(
+            args.imdb_train_path, args.imdb_dev_path, args.max_vocab_size)
 
     # Save the train_vocab to a file.
     vocab_dir = os.path.join(args.save_dir, "train_vocab")
@@ -190,9 +199,9 @@ def evaluate(model: TopicRNN,
     evaluation_iterator = BucketIterator(batch_size=batch_size, sorting_keys=[("input_tokens", "num_tokens")])
     evaluation_iterator.index_with(vocab)
     evaluation_generator = tqdm(evaluation_iterator(evaluation_dataset,
-                                                   num_epochs=1,
-                                                   shuffle=False,
-                                                   cuda_device=cuda_device))
+                                                    num_epochs=1,
+                                                    shuffle=False,
+                                                    cuda_device=cuda_device))
 
     # Reset metrics and compute them over validation.
     model.get_metrics(reset=True)

@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 def read_data(imdb_train_path: str,
               imdb_dev_path: str,
-              max_vocab_size: int = 5000):
+              max_vocab_size: int = 5000,
+              construct_vocab: bool = True):
     """
     Read IMDB data into instances while establishing a vocabulary.
     """
@@ -18,10 +19,12 @@ def read_data(imdb_train_path: str,
     logger.info("Read %s training examples", len(train_dataset))
 
     # Make a vocabulary object from the train set
-    train_vocab = Vocabulary.from_instances(train_dataset, max_vocab_size=max_vocab_size)
-
-    # Pre-caution: Unsupervised output won't include positive sentiment.
-    train_vocab.add_token_to_namespace("positive", "labels")
+    if construct_vocab:
+        train_vocab = Vocabulary.from_instances(train_dataset, max_vocab_size=max_vocab_size)
+        # Pre-caution: Unsupervised output won't include positive sentiment.
+        train_vocab.add_token_to_namespace("positive", "labels")
+    else:
+        train_vocab = False
 
     # Read IMDB validation set
     logger.info("Reading IMDB validation set at %s", imdb_dev_path)
