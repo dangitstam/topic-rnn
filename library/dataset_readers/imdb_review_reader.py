@@ -162,7 +162,6 @@ class IMDBReviewReader(DatasetReader):
         self._tokenizer = tokenizer or WordTokenizer(
             start_tokens=[START_SYMBOL],
             end_tokens=[END_SYMBOL],
-            word_splitter=JustSpacesWordSplitter()
         )
         self._token_indexers = token_indexers or {
             "tokens": SingleIdTokenIndexer(namespace="tokens", lowercase_tokens=True)

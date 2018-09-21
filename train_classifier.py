@@ -36,10 +36,10 @@ def main():
         os.path.dirname(os.path.realpath(__file__)))))
     parser.add_argument("--vocab-path", type=str,
                         default=os.path.join(
-                            project_root, "saved_models", "train_vocab")),
+                            project_root, "saved_language_models", "train_vocab")),
     parser.add_argument("--model-weights-path", type=str,
                         default=os.path.join(
-                            project_root, "saved_models", "best.th"),
+                            project_root, "saved_language_models", "model_state_batch_epoch_10.th"),
                         help="Path to the pre-trained model.")
     parser.add_argument("--imdb-train-path", type=str,
                         default=os.path.join(

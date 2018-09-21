@@ -73,7 +73,9 @@ class TopicRNN(Model):
             'cross_entropy': Average(),
             'negative_kl_divergence': Average(),
             'stopword_loss': Average(),
-            'topic_contribution': Average()
+            'topic_contribution': Average(),
+            'mean_nonzero_ratio': Average(),
+            'mapped_term_freq_nonzero_ratio': Average(),
         }
 
         self.classification_mode = classification_mode
@@ -95,8 +97,7 @@ class TopicRNN(Model):
             self.topic_dim = topic_dim
             self.bptt_limit = bptt_limit
             self.vocabulary_projection_layer = TimeDistributed(Linear(text_encoder.get_output_dim(),
-                                                                      self.vocab_size,
-                                                                      bias=False))
+                                                                      self.vocab_size))
 
             # Parameter gamma from the paper; projects hidden states into binary logits for whether a
             # word is a stopword.
@@ -131,12 +132,24 @@ class TopicRNN(Model):
             stopless_dim = vocab.get_vocab_size("stopless")
 
             # mu: The mean of the variational distribution.
-            self.mu_linear = nn.Linear(500, topic_dim)
-            nn.init.uniform_(self.mu_linear.weight)
+            self.mu_linear = torch.nn.Linear(500, topic_dim)
+            #   self.mu_linear = FeedForward(
+            #       500,
+            #       1,
+            #       [topic_dim],
+            #       # torch.nn.ReLU()
+            #   )
+            # nn.init.uniform_(self.mu_linear.weight)
 
             # sigma: The root standard deviation of the variational distribution.
-            self.sigma_linear = nn.Linear(500, topic_dim)
-            nn.init.uniform_(self.sigma_linear.weight)
+            self.sigma_linear = torch.nn.Linear(500, topic_dim)
+            #  self.sigma_linear = FeedForward(
+            #      500,
+            #      1,
+            #      [topic_dim],
+            #      # torch.nn.ReLU()
+            #  )
+            # nn.init.uniform_(self.sigma_linear.weight)
 
             # noise: used when sampling.
             self.noise = MultivariateNormal(torch.zeros(topic_dim), torch.eye(topic_dim))
@@ -144,8 +157,8 @@ class TopicRNN(Model):
             # TODO: Make this a simple feed-forward.
             self.variational_autoencoder = variational_autoencoder or FeedForward(
                 stopless_dim,
-                2,
-                [500, 500],
+                1,
+                [500],
                 torch.nn.ReLU()
             )
 
@@ -169,7 +182,7 @@ class TopicRNN(Model):
 
         self.sentiment_criterion = nn.CrossEntropyLoss()
 
-        self.num_samples = 1
+        self.num_samples = 10
 
         initializer(self)
 
@@ -223,6 +236,7 @@ class TopicRNN(Model):
         loss : torch.FloatTensor, optional
             A scalar loss to be optimised.
         """
+        import pdb; pdb.set_trace()
 
         # The model is either an LM or a classifier, not both.
         assert not (target_tokens and sentiment), "Multiple target outputs is ambiguous."
@@ -234,15 +248,15 @@ class TopicRNN(Model):
         device = input_tokens['tokens'].device
 
         # Compute Gaussian parameters.
-        stopless_word_frequencies = self._compute_word_frequency_vector(input_tokens).to(device=device)
+        stopless_word_frequencies = self._compute_word_frequency_vector(frequency_tokens).to(device=device)
         mapped_term_frequencies = self.variational_autoencoder(stopless_word_frequencies)
 
         mu = self.mu_linear(mapped_term_frequencies)
         log_sigma = self.sigma_linear(mapped_term_frequencies)
         sigma = torch.exp(log_sigma)
 
-        # print(mu.sum())
-        assert ((mu != 0).sum() / mu.numel()).item() == 1
+        self.metrics['mean_nonzero_ratio'](((mu != 0).sum() / mu.numel()).item())
+        self.metrics['mapped_term_freq_nonzero_ratio'](((mapped_term_frequencies != 0).sum() / mapped_term_frequencies.numel()).item())
 
         # Train the RNNs and backprop BPTT steps at a time.
         # Preserve the hidden state between BPTT chunks.
@@ -304,7 +318,7 @@ class TopicRNN(Model):
 
                 # Compute noisy topic proportions given Gaussian parameters.
                 theta = mu + sigma * epsilon
-                theta = torch.nn.functional.softmax(theta, dim=-1)
+                # theta = torch.nn.functional.softmax(theta, dim=-1)
 
                 # II. Compute cross entropy against next words for the current sample of noise.
                 # Padding and OOV tokens are indexed at 0 and 1.

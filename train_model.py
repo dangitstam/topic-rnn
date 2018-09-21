@@ -111,7 +111,7 @@ def main():
                                                     args.embedding_dim,
                                                     padding_index=0)}),
         PytorchSeq2SeqWrapper(RNNs[args.rnn_type](args.embedding_dim, args.hidden_size, batch_first=True)),
-        topic_dim=300
+        topic_dim=200
     )
 
     if args.cuda_device >= 0:
@@ -132,7 +132,7 @@ def train_epoch(model: TopicRNN,
                 serialization_dir: str,
                 epoch: int,
                 batch_size: int = 32,
-                bptt_limit: int = 35,
+                bptt_limit: int = 5,
                 cuda_device: int = -1):
     model.train()
     best_model_metrics = None
@@ -181,8 +181,8 @@ def train_epoch(model: TopicRNN,
 def evaluate(model: TopicRNN,
              vocab: Vocabulary,
              evaluation_dataset: Iterable[Instance],
-             batch_size: int = 64, 
-             bptt_limit: int = 35,
+             batch_size: int = 32, 
+             bptt_limit: int = 5,
              cuda_device: int = -1):
     model.eval()
 
