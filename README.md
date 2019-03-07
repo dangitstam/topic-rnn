@@ -1,4 +1,6 @@
 # TopicRNN: A Recurrent Neural Network with Long-Range Semantic Dependency
+Currently, it is not clear to me if this model can work. After preliminary experiments and observations it doesn't seem like this architecture can learn latent topics very well. So for now, it will be archived.
+
 Implementation of Dieng et al.'s [TopicRNN](https://arxiv.org/abs/1611.01702): a neural topic model & RNN hybrid that learns global semantic dependencies via latent topics and local, syntatic dependencies through an RNN.
 
 ## Model Details
